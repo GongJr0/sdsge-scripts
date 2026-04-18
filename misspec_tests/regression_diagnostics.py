@@ -11,6 +11,7 @@ from sklearn.metrics import r2_score
 
 @dataclass
 class OLSResult:
+    X: np.ndarray
     y_name: str
     x_names: list[str]
     beta: np.ndarray
@@ -84,6 +85,7 @@ def ols(y: np.ndarray, X: np.ndarray, *, intercept: bool = True, y_name: str = "
     p_value = 2 * (1 - t.cdf(np.abs(t_stat), df=n - k))
 
     return OLSResult(
+        X=X_reg,
         y_name=y_name,
         x_names=x_names,
         beta=beta,
@@ -134,7 +136,29 @@ class OrthogonalizationBundle:
         rows = []
         for target, model in self.models.items():
             formula = f"{target} ~ " + " + ".join(model.x_names)
+
+            X_full = model.X
+            y = model.fitted + model.resid  # original dependent variable
+
             for i, regressor in enumerate(model.x_names, start=1):
+                X_reduced = np.delete(X_full, i, axis=1)
+
+                remaining_x_names = [x for k, x in enumerate(model.x_names) if k != (i - 1)]
+
+                if len(remaining_x_names) == 0:
+                    r2_reduced = 0.0
+                else:
+                    reduced_model = ols(
+                        y=y,
+                        X=X_reduced[:, 1:] if X_reduced.shape[1] > 1 else np.empty((len(y), 0)),
+                        intercept=True,
+                        y_name=target,
+                        x_names=remaining_x_names,
+                    )
+                    r2_reduced = reduced_model.r2
+
+                marginal_r2 = model.r2 - r2_reduced
+
                 rows.append(
                     {
                         "target": target,
@@ -145,8 +169,10 @@ class OrthogonalizationBundle:
                         "t_stat": model.t_stat[i],
                         "p_value": model.p_value[i],
                         "r2": model.r2,
+                        "marginal_r2": marginal_r2,
                     }
                 )
+
         df = pd.DataFrame(rows)
         if round_to is not None:
             df = df.round(round_to)

@@ -250,6 +250,116 @@ def records_by_predictor(records: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
 
 
+INNOVATION_DECOMPOSITION_VALUE_COLUMNS = [
+    "beta_measurement_error",
+    "beta_state_prediction_error",
+    "beta_total_innovation",
+    "beta_component_sum",
+    "beta_component_gap",
+    "abs_beta_component_gap",
+    "reconstruction_max_abs_error",
+]
+
+
+def _aligned_true_states(
+    sol_dgp: Any,
+    sol_kf: Any,
+    sim_dgp: Mapping[str, np.ndarray],
+    sample_size: int,
+) -> np.ndarray:
+    true_state_path = np.asarray(sim_dgp["_X"], dtype=float)
+    if true_state_path.shape[0] < sample_size + 1:
+        raise ValueError(
+            f"DGP state path has {true_state_path.shape[0]} rows, but {sample_size + 1} are required."
+        )
+
+    try:
+        dgp_indices = [sol_dgp.compiled.idx[name] for name in sol_kf.compiled.var_names]
+    except KeyError as exc:
+        raise KeyError(
+            f"Cannot align DGP states to filter state {exc.args[0]!r}; the state is absent from the DGP."
+        ) from exc
+
+    return true_state_path[1 : sample_size + 1, :][:, dgp_indices]
+
+
+def _centered_slope(y: np.ndarray, x: np.ndarray) -> float:
+    y_vec = np.asarray(y, dtype=float).reshape(-1)
+    x_vec = np.asarray(x, dtype=float).reshape(-1)
+    if y_vec.shape[0] != x_vec.shape[0]:
+        raise ValueError(
+            f"Slope inputs must have equal length, got {y_vec.shape[0]} and {x_vec.shape[0]}."
+        )
+
+    y_centered = y_vec - np.mean(y_vec)
+    x_centered = x_vec - np.mean(x_vec)
+    denom = float(x_centered @ x_centered)
+    if denom == 0.0:
+        return np.nan
+    return float((x_centered @ y_centered) / denom)
+
+
+def innovation_decomposition_records(
+    sol_kf: Any,
+    sol_dgp: Any,
+    sim_dgp: Mapping[str, np.ndarray],
+    obs: np.ndarray,
+    kf: Any,
+    predictors: Mapping[str, np.ndarray],
+    *,
+    replication: int,
+    structure: str,
+) -> pd.DataFrame:
+    obs_arr = np.asarray(obs, dtype=float)
+    innov = np.asarray(kf.innov, dtype=float)
+    x_pred = np.asarray(kf.x_pred, dtype=float)
+    sample_size = int(innov.shape[0])
+
+    if obs_arr.shape != innov.shape:
+        raise ValueError(f"Observed data shape {obs_arr.shape} does not match innovation shape {innov.shape}.")
+    if x_pred.shape[0] != sample_size:
+        raise ValueError(
+            f"Predicted state length {x_pred.shape[0]} does not match innovation length {sample_size}."
+        )
+
+    true_states = _aligned_true_states(sol_dgp, sol_kf, sim_dgp, sample_size)
+    H, delta = sol_kf._build_C_d_from_obs(list(MEASUREMENT_NAMES))
+    measurement_error_component = obs_arr - (true_states @ H.T + delta)
+    state_prediction_error_component = (true_states - x_pred) @ H.T
+    reconstructed_innovation = measurement_error_component + state_prediction_error_component
+    reconstruction_max_abs_error = float(np.max(np.abs(innov - reconstructed_innovation)))
+
+    rows = []
+    for measurement_idx, measurement_name in enumerate(MEASUREMENT_NAMES):
+        for predictor_name in STATE_NAMES:
+            if predictor_name not in predictors:
+                continue
+
+            predictor = predictors[predictor_name]
+            beta_measurement = _centered_slope(measurement_error_component[:, measurement_idx], predictor)
+            beta_state_prediction = _centered_slope(state_prediction_error_component[:, measurement_idx], predictor)
+            beta_total = _centered_slope(innov[:, measurement_idx], predictor)
+            beta_component_sum = beta_measurement + beta_state_prediction
+            beta_component_gap = beta_total - beta_component_sum
+            rows.append(
+                {
+                    "replication": replication,
+                    "structure": structure,
+                    "measurement": measurement_name,
+                    "predictor": predictor_name,
+                    "beta_measurement_error": beta_measurement,
+                    "beta_state_prediction_error": beta_state_prediction,
+                    "beta_total_innovation": beta_total,
+                    "beta_component_sum": beta_component_sum,
+                    "beta_component_gap": beta_component_gap,
+                    "abs_beta_component_gap": abs(beta_component_gap),
+                    "reconstruction_max_abs_error": reconstruction_max_abs_error,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
 def compare_regression_setups(
     baseline_records: pd.DataFrame,
     candidate_records: pd.DataFrame,
@@ -694,16 +804,12 @@ def summarize_reference_experiment(
     orth_rows: list[pd.DataFrame] = []
     raw_reg_rows: list[pd.DataFrame] = []
     orth_reg_rows: list[pd.DataFrame] = []
-    raw_reg_no_intercept_rows: list[pd.DataFrame] = []
-    orth_reg_no_intercept_rows: list[pd.DataFrame] = []
     raw_lag_block_rows: list[pd.DataFrame] = []
     orth_lag_block_rows: list[pd.DataFrame] = []
-    raw_lag_block_no_intercept_rows: list[pd.DataFrame] = []
-    orth_lag_block_no_intercept_rows: list[pd.DataFrame] = []
     raw_lag_block_coefficient_rows: list[pd.DataFrame] = []
     orth_lag_block_coefficient_rows: list[pd.DataFrame] = []
-    raw_lag_block_no_intercept_coefficient_rows: list[pd.DataFrame] = []
-    orth_lag_block_no_intercept_coefficient_rows: list[pd.DataFrame] = []
+    raw_decomposition_rows: list[pd.DataFrame] = []
+    orth_decomposition_rows: list[pd.DataFrame] = []
     representative: ReferenceRepresentative | None = None
     seed_counter = make_seed_counter()
 
@@ -738,14 +844,6 @@ def summarize_reference_experiment(
         orth_reg_df["replication"] = replication
         orth_reg_rows.append(orth_reg_df)
 
-        raw_no_intercept_df = reg_diag["measurement_regressions_raw_no_intercept"].raw.copy()
-        raw_no_intercept_df["replication"] = replication
-        raw_reg_no_intercept_rows.append(raw_no_intercept_df)
-
-        orth_no_intercept_df = reg_diag["measurement_regressions_orthogonalized_no_intercept"].raw.copy()
-        orth_no_intercept_df["replication"] = replication
-        orth_reg_no_intercept_rows.append(orth_no_intercept_df)
-
         raw_lag_block_df = reg_diag["measurement_lag_block_regressions_raw"].raw.copy()
         raw_lag_block_df["replication"] = replication
         raw_lag_block_rows.append(raw_lag_block_df)
@@ -753,14 +851,6 @@ def summarize_reference_experiment(
         orth_lag_block_df = reg_diag["measurement_lag_block_regressions_orthogonalized"].raw.copy()
         orth_lag_block_df["replication"] = replication
         orth_lag_block_rows.append(orth_lag_block_df)
-
-        raw_lag_block_no_intercept_df = reg_diag["measurement_lag_block_regressions_raw_no_intercept"].raw.copy()
-        raw_lag_block_no_intercept_df["replication"] = replication
-        raw_lag_block_no_intercept_rows.append(raw_lag_block_no_intercept_df)
-
-        orth_lag_block_no_intercept_df = reg_diag["measurement_lag_block_regressions_orthogonalized_no_intercept"].raw.copy()
-        orth_lag_block_no_intercept_df["replication"] = replication
-        orth_lag_block_no_intercept_rows.append(orth_lag_block_no_intercept_df)
 
         raw_lag_block_coefs_df = reg_diag["measurement_lag_block_regressions_raw"].coefficients.copy()
         raw_lag_block_coefs_df["replication"] = replication
@@ -770,13 +860,30 @@ def summarize_reference_experiment(
         orth_lag_block_coefs_df["replication"] = replication
         orth_lag_block_coefficient_rows.append(orth_lag_block_coefs_df)
 
-        raw_lag_block_no_intercept_coefs_df = reg_diag["measurement_lag_block_regressions_raw_no_intercept"].coefficients.copy()
-        raw_lag_block_no_intercept_coefs_df["replication"] = replication
-        raw_lag_block_no_intercept_coefficient_rows.append(raw_lag_block_no_intercept_coefs_df)
-
-        orth_lag_block_no_intercept_coefs_df = reg_diag["measurement_lag_block_regressions_orthogonalized_no_intercept"].coefficients.copy()
-        orth_lag_block_no_intercept_coefs_df["replication"] = replication
-        orth_lag_block_no_intercept_coefficient_rows.append(orth_lag_block_no_intercept_coefs_df)
+        raw_decomposition_rows.append(
+            innovation_decomposition_records(
+                sol,
+                sol_dgp,
+                sim_dgp,
+                obs,
+                kf,
+                reg_diag["states"],
+                replication=replication,
+                structure="raw",
+            )
+        )
+        orth_decomposition_rows.append(
+            innovation_decomposition_records(
+                sol,
+                sol_dgp,
+                sim_dgp,
+                obs,
+                kf,
+                reg_diag["orthogonalization"].residuals,
+                replication=replication,
+                structure="orthogonalized",
+            )
+        )
 
         if representative is None:
             representative = ReferenceRepresentative(
@@ -793,16 +900,12 @@ def summarize_reference_experiment(
     orth_records = pd.concat(orth_rows, ignore_index=True)
     raw_reg_records = pd.concat(raw_reg_rows, ignore_index=True)
     orth_reg_records = pd.concat(orth_reg_rows, ignore_index=True)
-    raw_reg_no_intercept_records = pd.concat(raw_reg_no_intercept_rows, ignore_index=True)
-    orth_reg_no_intercept_records = pd.concat(orth_reg_no_intercept_rows, ignore_index=True)
     raw_lag_block_records = pd.concat(raw_lag_block_rows, ignore_index=True)
     orth_lag_block_records = pd.concat(orth_lag_block_rows, ignore_index=True)
-    raw_lag_block_no_intercept_records = pd.concat(raw_lag_block_no_intercept_rows, ignore_index=True)
-    orth_lag_block_no_intercept_records = pd.concat(orth_lag_block_no_intercept_rows, ignore_index=True)
     raw_lag_block_coefficient_records = pd.concat(raw_lag_block_coefficient_rows, ignore_index=True)
     orth_lag_block_coefficient_records = pd.concat(orth_lag_block_coefficient_rows, ignore_index=True)
-    raw_lag_block_no_intercept_coefficient_records = pd.concat(raw_lag_block_no_intercept_coefficient_rows, ignore_index=True)
-    orth_lag_block_no_intercept_coefficient_records = pd.concat(orth_lag_block_no_intercept_coefficient_rows, ignore_index=True)
+    raw_decomposition_records = pd.concat(raw_decomposition_rows, ignore_index=True)
+    orth_decomposition_records = pd.concat(orth_decomposition_rows, ignore_index=True)
 
     return {
         "representative": representative,
@@ -844,20 +947,6 @@ def summarize_reference_experiment(
             ["measurement", "predictor"],
             alpha=alpha,
         ),
-        "measurement_regressions_raw_no_intercept_records": raw_reg_no_intercept_records,
-        "measurement_regressions_raw_no_intercept_by_predictor": records_by_predictor(raw_reg_no_intercept_records),
-        "measurement_regressions_raw_no_intercept_summary": add_rejection_summary(
-            raw_reg_no_intercept_records,
-            ["measurement", "predictor"],
-            alpha=alpha,
-        ),
-        "measurement_regressions_orthogonalized_no_intercept_records": orth_reg_no_intercept_records,
-        "measurement_regressions_orthogonalized_no_intercept_by_predictor": records_by_predictor(orth_reg_no_intercept_records),
-        "measurement_regressions_orthogonalized_no_intercept_summary": add_rejection_summary(
-            orth_reg_no_intercept_records,
-            ["measurement", "predictor"],
-            alpha=alpha,
-        ),
         "measurement_lag_block_regressions_raw_records": raw_lag_block_records,
         "measurement_lag_block_regressions_raw_by_predictor": records_by_predictor(raw_lag_block_records),
         "measurement_lag_block_regressions_raw_summary": add_rejection_summary(
@@ -872,28 +961,26 @@ def summarize_reference_experiment(
             ["measurement", "predictor"],
             alpha=alpha,
         ),
-        "measurement_lag_block_regressions_raw_no_intercept_records": raw_lag_block_no_intercept_records,
-        "measurement_lag_block_regressions_raw_no_intercept_by_predictor": records_by_predictor(raw_lag_block_no_intercept_records),
-        "measurement_lag_block_regressions_raw_no_intercept_summary": add_rejection_summary(
-            raw_lag_block_no_intercept_records,
-            ["measurement", "predictor"],
-            alpha=alpha,
-        ),
-        "measurement_lag_block_regressions_orthogonalized_no_intercept_records": orth_lag_block_no_intercept_records,
-        "measurement_lag_block_regressions_orthogonalized_no_intercept_by_predictor": records_by_predictor(orth_lag_block_no_intercept_records),
-        "measurement_lag_block_regressions_orthogonalized_no_intercept_summary": add_rejection_summary(
-            orth_lag_block_no_intercept_records,
-            ["measurement", "predictor"],
-            alpha=alpha,
-        ),
         "measurement_lag_block_coefficients_raw_records": raw_lag_block_coefficient_records,
         "measurement_lag_block_coefficients_raw_by_predictor": records_by_predictor(raw_lag_block_coefficient_records),
         "measurement_lag_block_coefficients_orthogonalized_records": orth_lag_block_coefficient_records,
         "measurement_lag_block_coefficients_orthogonalized_by_predictor": records_by_predictor(orth_lag_block_coefficient_records),
-        "measurement_lag_block_coefficients_raw_no_intercept_records": raw_lag_block_no_intercept_coefficient_records,
-        "measurement_lag_block_coefficients_raw_no_intercept_by_predictor": records_by_predictor(raw_lag_block_no_intercept_coefficient_records),
-        "measurement_lag_block_coefficients_orthogonalized_no_intercept_records": orth_lag_block_no_intercept_coefficient_records,
-        "measurement_lag_block_coefficients_orthogonalized_no_intercept_by_predictor": records_by_predictor(orth_lag_block_no_intercept_coefficient_records),
+        "innovation_decomposition_raw_records": raw_decomposition_records,
+        "innovation_decomposition_raw_by_predictor": records_by_predictor(raw_decomposition_records),
+        "innovation_decomposition_raw_summary": aggregate_scalar_frame(
+            raw_decomposition_records,
+            ["measurement", "predictor"],
+            value_cols=INNOVATION_DECOMPOSITION_VALUE_COLUMNS,
+            alpha=alpha,
+        ),
+        "innovation_decomposition_orthogonalized_records": orth_decomposition_records,
+        "innovation_decomposition_orthogonalized_by_predictor": records_by_predictor(orth_decomposition_records),
+        "innovation_decomposition_orthogonalized_summary": aggregate_scalar_frame(
+            orth_decomposition_records,
+            ["measurement", "predictor"],
+            value_cols=INNOVATION_DECOMPOSITION_VALUE_COLUMNS,
+            alpha=alpha,
+        ),
         "measurement_regression_setup_comparison_raw": compare_regression_setups(
             raw_reg_records,
             raw_lag_block_records,
@@ -905,22 +992,6 @@ def summarize_reference_experiment(
         "measurement_regression_setup_comparison_orthogonalized": compare_regression_setups(
             orth_reg_records,
             orth_lag_block_records,
-            baseline_name="contemporaneous",
-            candidate_name="lag_block",
-            group_cols=["measurement", "predictor"],
-            alpha=alpha,
-        ),
-        "measurement_regression_setup_comparison_raw_no_intercept": compare_regression_setups(
-            raw_reg_no_intercept_records,
-            raw_lag_block_no_intercept_records,
-            baseline_name="contemporaneous",
-            candidate_name="lag_block",
-            group_cols=["measurement", "predictor"],
-            alpha=alpha,
-        ),
-        "measurement_regression_setup_comparison_orthogonalized_no_intercept": compare_regression_setups(
-            orth_reg_no_intercept_records,
-            orth_lag_block_no_intercept_records,
             baseline_name="contemporaneous",
             candidate_name="lag_block",
             group_cols=["measurement", "predictor"],

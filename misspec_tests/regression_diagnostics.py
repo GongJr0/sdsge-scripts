@@ -524,18 +524,6 @@ def run_full_regression_diagnostics(
         intercept=intercept,
         z_score_standardization=z_score_standardization,
     )
-    raw_measurement_regs_no_intercept = run_measurement_regressions(
-        measurements,
-        raw_states,
-        intercept=False,
-        z_score_standardization=z_score_standardization,
-    )
-    orth_measurement_regs_no_intercept = run_measurement_regressions(
-        measurements,
-        orth_bundle.residuals,
-        intercept=False,
-        z_score_standardization=z_score_standardization,
-    )
     raw_lag_block_regs = run_measurement_lag_block_regressions(
         measurements,
         raw_states,
@@ -545,16 +533,6 @@ def run_full_regression_diagnostics(
         measurements,
         orth_bundle.residuals,
         intercept=intercept,
-    )
-    raw_lag_block_regs_no_intercept = run_measurement_lag_block_regressions(
-        measurements,
-        raw_states,
-        intercept=False,
-    )
-    orth_lag_block_regs_no_intercept = run_measurement_lag_block_regressions(
-        measurements,
-        orth_bundle.residuals,
-        intercept=False,
     )
 
     raw_single_predictor = run_single_predictor_reports(
@@ -569,18 +547,6 @@ def run_full_regression_diagnostics(
         intercept=intercept,
         z_score_standardization=z_score_standardization,
     )
-    raw_single_predictor_no_intercept = run_single_predictor_reports(
-        measurements,
-        raw_states,
-        intercept=False,
-        z_score_standardization=z_score_standardization,
-    )
-    orth_single_predictor_no_intercept = run_single_predictor_reports(
-        measurements,
-        orth_bundle.residuals,
-        intercept=False,
-        z_score_standardization=z_score_standardization,
-    )
 
     return {
         "states": raw_states,
@@ -588,16 +554,10 @@ def run_full_regression_diagnostics(
         "orthogonalization": orth_bundle,
         "measurement_regressions_raw": raw_measurement_regs,
         "measurement_regressions_orthogonalized": orth_measurement_regs,
-        "measurement_regressions_raw_no_intercept": raw_measurement_regs_no_intercept,
-        "measurement_regressions_orthogonalized_no_intercept": orth_measurement_regs_no_intercept,
         "measurement_lag_block_regressions_raw": raw_lag_block_regs,
         "measurement_lag_block_regressions_orthogonalized": orth_lag_block_regs,
-        "measurement_lag_block_regressions_raw_no_intercept": raw_lag_block_regs_no_intercept,
-        "measurement_lag_block_regressions_orthogonalized_no_intercept": orth_lag_block_regs_no_intercept,
         "single_predictor_reports_raw": raw_single_predictor,
         "single_predictor_reports_orthogonalized": orth_single_predictor,
-        "single_predictor_reports_raw_no_intercept": raw_single_predictor_no_intercept,
-        "single_predictor_reports_orthogonalized_no_intercept": orth_single_predictor_no_intercept,
         "z_score_standardization": z_score_standardization,
     }
 
@@ -607,16 +567,10 @@ def format_regression_outputs(diagnostics: Mapping[str, object], *, round_to: in
     orth_bundle: OrthogonalizationBundle = diagnostics["orthogonalization"]
     raw_regs: MeasurementRegressionBundle = diagnostics["measurement_regressions_raw"]
     orth_regs: MeasurementRegressionBundle = diagnostics["measurement_regressions_orthogonalized"]
-    raw_regs_no_intercept: MeasurementRegressionBundle = diagnostics["measurement_regressions_raw_no_intercept"]
-    orth_regs_no_intercept: MeasurementRegressionBundle = diagnostics["measurement_regressions_orthogonalized_no_intercept"]
     raw_lag_regs: LagBlockRegressionBundle = diagnostics["measurement_lag_block_regressions_raw"]
     orth_lag_regs: LagBlockRegressionBundle = diagnostics["measurement_lag_block_regressions_orthogonalized"]
-    raw_lag_regs_no_intercept: LagBlockRegressionBundle = diagnostics["measurement_lag_block_regressions_raw_no_intercept"]
-    orth_lag_regs_no_intercept: LagBlockRegressionBundle = diagnostics["measurement_lag_block_regressions_orthogonalized_no_intercept"]
     raw_single: SinglePredictorRegressionBundle = diagnostics["single_predictor_reports_raw"]
     orth_single: SinglePredictorRegressionBundle = diagnostics["single_predictor_reports_orthogonalized"]
-    raw_single_no_intercept: SinglePredictorRegressionBundle = diagnostics["single_predictor_reports_raw_no_intercept"]
-    orth_single_no_intercept: SinglePredictorRegressionBundle = diagnostics["single_predictor_reports_orthogonalized_no_intercept"]
 
     return {
         "z_score_standardization": diagnostics.get("z_score_standardization", False),
@@ -629,28 +583,12 @@ def format_regression_outputs(diagnostics: Mapping[str, object], *, round_to: in
         "measurement_standardized_coef_orthogonalized": orth_regs.pivot_standardized_coef.round(round_to),
         "measurement_p_value_orthogonalized": orth_regs.pivot_p_value.round(round_to),
         "measurement_std_error_orthogonalized": orth_regs.pivot_std_error.round(round_to),
-        "measurement_coef_raw_no_intercept": raw_regs_no_intercept.pivot_coef.round(round_to),
-        "measurement_standardized_coef_raw_no_intercept": raw_regs_no_intercept.pivot_standardized_coef.round(round_to),
-        "measurement_p_value_raw_no_intercept": raw_regs_no_intercept.pivot_p_value.round(round_to),
-        "measurement_std_error_raw_no_intercept": raw_regs_no_intercept.pivot_std_error.round(round_to),
-        "measurement_coef_orthogonalized_no_intercept": orth_regs_no_intercept.pivot_coef.round(round_to),
-        "measurement_standardized_coef_orthogonalized_no_intercept": orth_regs_no_intercept.pivot_standardized_coef.round(round_to),
-        "measurement_p_value_orthogonalized_no_intercept": orth_regs_no_intercept.pivot_p_value.round(round_to),
-        "measurement_std_error_orthogonalized_no_intercept": orth_regs_no_intercept.pivot_std_error.round(round_to),
         "single_predictor_raw": {k: v.round(round_to) for k, v in raw_single.by_measurement.items()},
         "single_predictor_orthogonalized": {k: v.round(round_to) for k, v in orth_single.by_measurement.items()},
-        "single_predictor_raw_no_intercept": {k: v.round(round_to) for k, v in raw_single_no_intercept.by_measurement.items()},
-        "single_predictor_orthogonalized_no_intercept": {k: v.round(round_to) for k, v in orth_single_no_intercept.by_measurement.items()},
         "measurement_regressions_raw_long": raw_regs.raw.round(round_to),
         "measurement_regressions_orthogonalized_long": orth_regs.raw.round(round_to),
-        "measurement_regressions_raw_no_intercept_long": raw_regs_no_intercept.raw.round(round_to),
-        "measurement_regressions_orthogonalized_no_intercept_long": orth_regs_no_intercept.raw.round(round_to),
         "measurement_lag_block_regressions_raw_long": raw_lag_regs.raw.round(round_to),
         "measurement_lag_block_regressions_orthogonalized_long": orth_lag_regs.raw.round(round_to),
-        "measurement_lag_block_regressions_raw_no_intercept_long": raw_lag_regs_no_intercept.raw.round(round_to),
-        "measurement_lag_block_regressions_orthogonalized_no_intercept_long": orth_lag_regs_no_intercept.raw.round(round_to),
         "measurement_lag_block_coefficients_raw_long": raw_lag_regs.coefficients.round(round_to),
         "measurement_lag_block_coefficients_orthogonalized_long": orth_lag_regs.coefficients.round(round_to),
-        "measurement_lag_block_coefficients_raw_no_intercept_long": raw_lag_regs_no_intercept.coefficients.round(round_to),
-        "measurement_lag_block_coefficients_orthogonalized_no_intercept_long": orth_lag_regs_no_intercept.coefficients.round(round_to),
     }

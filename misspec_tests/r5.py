@@ -297,12 +297,12 @@ _sort_summary(mc_reference["measurement_regressions_raw_summary"]).round(3)
 
 
 # %%
-print("Innovations on orthogonalized predicted states, no intercept (Monte Carlo averages and rejection rates):")
-_sort_summary(mc_reference["measurement_regressions_orthogonalized_no_intercept_summary"]).round(3)
+print("Innovation decomposition on orthogonalized predicted states (Monte Carlo averages):")
+_sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"]).round(3)
 
 # %%
-print("Innovations on raw predicted states, no intercept (Monte Carlo averages and rejection rates):")
-_sort_summary(mc_reference["measurement_regressions_raw_no_intercept_summary"]).round(3)
+print("Innovation decomposition on raw predicted states (Monte Carlo averages):")
+_sort_summary(mc_reference["innovation_decomposition_raw_summary"]).round(3)
 
 
 # %% [markdown]

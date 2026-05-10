@@ -44,7 +44,7 @@ import io
 STDOUT_VOID = lambda: contextlib.redirect_stdout(io.StringIO())
 
 _KNOWN_R = True
-_AUGMENTED_PARAM = 'Pi_coef'
+_AUGMENTED_PARAM = 'x_coef'
 _AUGMENTED_EQUATION = 'OutGap'
 _AUGMENTED_CONFIG = augmented_config_path(_AUGMENTED_EQUATION)
 _MEAS_ERR_SCALE = 0.025
@@ -52,6 +52,7 @@ _MC_SAMPLES = 1000
 _MC_ALPHA = 0.05
 _FIGSIZE_1D = (10, 6)
 _FIGSIZE_2D = (12, 6)
+
 
 
 # %%
@@ -178,115 +179,15 @@ print(f"Augmented coefficient: {_AUGMENTED_PARAM}")
 print(f"Monte Carlo replications: {_MC_SAMPLES}")
 print("Noise Covariance:\n", np.diag(err_scale).round(3))
 
-# %%
-# Plot filter outputs for the representative draw
-fig, ax = plt.subplots(3, 1, figsize=_FIGSIZE_1D)
-
-ax[0].plot(range(T), obs[:, 0], label="DGP", color="black", alpha=0.5)
-ax[0].plot(range(T), kf.y_pred[:, 0], label="Predicted", color="blue")
-ax[0].plot(range(T), kf.y_filt[:, 0], label="Filtered", color="red", linestyle=":")
-ax[0].set_title("Output Gap")
-
-ax[1].plot(range(T), obs[:, 1], label="DGP", color="black", alpha=0.5)
-ax[1].plot(range(T), kf.y_pred[:, 1], label="Predicted", color="blue")
-ax[1].plot(range(T), kf.y_filt[:, 1], label="Filtered", color="red", linestyle=":")
-ax[1].set_title("Inflation")
-
-ax[2].plot(range(T), obs[:, 2], label="DGP", color="black", alpha=0.5)
-ax[2].plot(range(T), kf.y_pred[:, 2], label="Predicted", color="blue")
-ax[2].plot(range(T), kf.y_filt[:, 2], label="Filtered", color="red", linestyle=":")
-ax[2].set_title("Interest Rate")
-ax[2].legend()
-
-plt.tight_layout()
-plt.show()
-
 
 # %%
-# Simulation against DGP for the representative draw
-fig, ax = plt.subplots(3, 1, figsize=_FIGSIZE_1D)
-
-ax[0].plot(range(T), obs[:, 0], label="DGP", color="black", alpha=0.33)
-ax[0].plot(range(T), ref[:, 0], label="Reference Model", color="blue")
-ax[0].set_title("Output Gap")
-ax[0].legend()
-
-ax[1].plot(range(T), obs[:, 1], label="DGP", color="black", alpha=0.33)
-ax[1].plot(range(T), ref[:, 1], label="Reference Model", color="blue")
-ax[1].set_title("Inflation")
-ax[1].legend()
-
-ax[2].plot(range(T), obs[:, 2], label="DGP", color="black", alpha=0.33)
-ax[2].plot(range(T), ref[:, 2], label="Reference Model", color="blue")
-ax[2].set_title("Interest Rate")
-ax[2].legend()
-
-plt.tight_layout()
-plt.show()
-
-
-# %%
-fig, ax = plt.subplots(1, 3, figsize=_FIGSIZE_2D)
-
-plt.suptitle("Distribution of Simulated Observables")
-
-ax[0].boxplot(obs_dgp[:, 0], positions=[1], widths=0.6, patch_artist=True, boxprops=dict(facecolor="lightblue"), label="DGP")
-ax[0].boxplot(sim2["OutGap"], positions=[2], widths=0.6, patch_artist=True, boxprops=dict(facecolor="lightgreen"), label="Reference")
-ax[0].set_title("Output Gap")
-
-ax[1].boxplot(obs_dgp[:, 1], positions=[1], widths=0.6, patch_artist=True, boxprops=dict(facecolor="lightblue"), label="DGP")
-ax[1].boxplot(sim2["Infl"], positions=[2], widths=0.6, patch_artist=True, boxprops=dict(facecolor="lightgreen"), label="Reference")
-ax[1].set_title("Inflation")
-
-ax[2].boxplot(obs_dgp[:, 2], positions=[1], widths=0.6, patch_artist=True, boxprops=dict(facecolor="lightblue"), label="DGP")
-ax[2].boxplot(sim2["Rate"], positions=[2], widths=0.6, patch_artist=True, boxprops=dict(facecolor="lightgreen"), label="Reference")
-ax[2].set_title("Interest Rate")
-ax[2].legend()
-
-
-# %%
-# Representative ACF/PACF plus Monte Carlo Ljung-Box summary
-fig, ax = plt.subplots(3, 2, figsize=_FIGSIZE_2D)
-
-plot_acf(std_innov[:, 0], ax=ax[0, 0], lags=20)
-plot_pacf(std_innov[:, 0], ax=ax[0, 1], lags=20)
-ax[0, 0].set_title("ACF of Output Gap Innovations")
-ax[0, 1].set_title("PACF of Output Gap Innovations")
-
-plot_acf(std_innov[:, 1], ax=ax[1, 0], lags=20)
-plot_pacf(std_innov[:, 1], ax=ax[1, 1], lags=20)
-ax[1, 0].set_title("ACF of Inflation Innovations")
-ax[1, 1].set_title("PACF of Inflation Innovations")
-
-plot_acf(std_innov[:, 2], ax=ax[2, 0], lags=20)
-plot_pacf(std_innov[:, 2], ax=ax[2, 1], lags=20)
-ax[2, 0].set_title("ACF of Interest Rate Innovations")
-ax[2, 1].set_title("PACF of Interest Rate Innovations")
-
-plt.tight_layout()
-plt.show()
-
 print(f"Monte Carlo Ljung-Box summary across {_MC_SAMPLES} replications:")
-mc_reference["lb_summary"].round(3)
+display(mc_reference["lb_summary"].round(3))
 
 
 # %%
-print(f"Monte Carlo average of standardized innovation means across {_MC_SAMPLES} replications:\n", mc_reference["moment_mean_vector"].round(3), "\n")
-print("Monte Carlo SE of average means:\n", mc_reference["moment_mean_vector_mc_se"].round(3), "\n")
-print("Monte Carlo average covariance:\n", mc_reference["moment_covariance"].round(3), "\n")
-print("Monte Carlo SE of average covariance:\n", mc_reference["moment_covariance_mc_se"].round(3), "\n")
-print("Monte Carlo average correlation:\n", mc_reference["moment_correlation"].round(3), "\n")
-print("Monte Carlo SE of average correlation:\n", mc_reference["moment_correlation_mc_se"].round(3), "\n")
-print("Max absolute deviations of Monte Carlo average moments:\n", mc_reference["moment_summary"].round(3), "\n")
-print("Monte Carlo SE for selected max-deviation components:\n", mc_reference["moment_summary_mc_se"].round(3))
-
-
-# %%
-mc_reference["moment_specification_test_summary"].round(3)
-
-# %%
-print("Orthogonalization summary (Monte Carlo averages and rejection rates):")
-_sort_summary(mc_reference["orthogonalization_summary"]).round(3)
+print(f"Moment Tests summary across {_MC_SAMPLES} replications:")
+display(mc_reference["moment_specification_test_summary"].round(3))
 
 # %%
 print("Innovations on orthogonalized predicted states (Monte Carlo averages and rejection rates):")
@@ -304,7 +205,6 @@ _sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"]).r
 # %%
 print("Innovation decomposition on raw predicted states (Monte Carlo averages):")
 _sort_summary(mc_reference["innovation_decomposition_raw_summary"]).round(3)
-
 
 # %% [markdown]
 # Monte Carlo summaries above aggregate `_MC_SAMPLES` independent draws. The plots and MCMC output below continue on a representative first draw so the original visual workflow remains available.
@@ -339,130 +239,33 @@ with STDOUT_VOID():
         alpha=_MC_ALPHA,
     )
 
-estim = lambda: solver_aug.estimate_and_solve(
-    compiled=comp_aug,
-    method="mcmc",
-    n_draws=25_000,
-    burn_in=10_000,
-    thin=2,
-    posterior_point="mean",
-    proposal_scale=1.0,
-    y=obs,
-    priors=priors,
-    steady_state=[0.0, 0.0, 0.0, 0.0, 0.0],
-    random_state=next_seed(_plot_seed_counter),
-    **mc_reference["filter_kwargs"],
-)
-res_aug, sol_aug = estim()
+# estim = lambda: solver_aug.estimate_and_solve(
+#     compiled=comp_aug,
+#     method="mcmc",
+#     n_draws=25_000,
+#     burn_in=10_000,
+#     thin=2,
+#     posterior_point="mean",
+#     proposal_scale=1.0,
+#     y=obs,
+#     priors=priors,
+#     steady_state=[0.0, 0.0, 0.0, 0.0, 0.0],
+#     random_state=next_seed(_plot_seed_counter),
+#     **mc_reference["filter_kwargs"],
+# )
+# res_aug, sol_aug = estim()
 
-
-# %%
-coeff_trace = res_aug.samples[:, 0]
-
-kde = gaussian_kde(coeff_trace)
-norm_fit = norm(loc=coeff_trace.mean(), scale=coeff_trace.std())
-x_range = np.linspace(coeff_trace.min(), coeff_trace.max(), 1000)
-fig, ax = plt.subplots(2, 1, figsize=_FIGSIZE_1D)
-
-ax[0].plot(x_range, kde(x_range), color="blue")
-ax[0].plot(x_range, norm_fit.pdf(x_range), linestyle="--", color="red", alpha=0.5, label="Gaussian Fit")
-ax[0].set_title("Posterior Density")
-ax[0].legend()
-
-ax[1].plot(coeff_trace, color="blue")
-ax[1].set_title("Trace Plot")
-
-plt.tight_layout()
-plt.show()
-
-
-# %%
-sol_aug.config.calibration.parameters[_AUGMENTED_PARAM].round(3)
-
-
-# %%
-tuple(map(lambda x: float(x.round(3)), res_aug.hpd_intervals()[_AUGMENTED_PARAM]))
-
-# %%
-res_aug.accept_rate
 
 
 # %% [markdown]
 # The MCMC estimates above are shown for the representative first draw. The Monte Carlo summaries for correction tests below are computed with MLE to keep the replicated stage tractable.
 #
 
-# %%
-kf_aug = sol_aug.kalman(
-    y=obs,
-    filter_mode="linear",
-    estimate_R_diag=False,
-    **mc_reference["filter_kwargs"],
-)
-round(kf_aug.loglik, 2)
-
-
 # %% [markdown]
 # ## Diagnostics of the Augmented Model
 #
 # The figures below still display the representative first draw. The scalar summaries reported in later cells are Monte Carlo averages.
 #
-
-# %%
-# Plot KF outputs for the representative augmented draw
-fig, ax = plt.subplots(3, 1, figsize=_FIGSIZE_1D)
-ax[0].plot(range(T), obs[:, 0], label="DGP", color="black", alpha=0.33)
-ax[0].plot(range(T), kf_aug.y_pred[:, 0], label="Predicted", color="blue")
-ax[0].plot(range(T), kf_aug.y_filt[:, 0], label="Filtered", color="red", linestyle=":")
-ax[0].set_title("Output Gap")
-ax[0].legend()
-
-ax[1].plot(range(T), obs[:, 1], label="DGP", color="black", alpha=0.33)
-ax[1].plot(range(T), kf_aug.y_pred[:, 1], label="Predicted", color="blue")
-ax[1].plot(range(T), kf_aug.y_filt[:, 1], label="Filtered", color="red", linestyle=":")
-ax[1].set_title("Inflation")
-ax[1].legend()
-
-ax[2].plot(range(T), obs[:, 2], label="DGP", color="black", alpha=0.33)
-ax[2].plot(range(T), kf_aug.y_pred[:, 2], label="Predicted", color="blue")
-ax[2].plot(range(T), kf_aug.y_filt[:, 2], label="Filtered", color="red", linestyle=":")
-ax[2].set_title("Interest Rate")
-ax[2].legend()
-
-plt.tight_layout()
-plt.show()
-
-
-# %%
-# Simulation against DGP for the representative augmented draw
-sim_aug = sol_aug.sim(
-    T=T,
-    shocks={
-        "g,z": Shock(T, "norm", multivar=True, seed=next_seed(_plot_seed_counter)).shock_generator(),
-        "r": Shock(T, "norm", multivar=False, seed=next_seed(_plot_seed_counter)).shock_generator(),
-    },
-    observables=True,
-)
-aug = np.column_stack([sim_aug["OutGap"], sim_aug["Infl"], sim_aug["Rate"]])[1:, :]
-fig, ax = plt.subplots(3, 1, figsize=_FIGSIZE_1D)
-
-ax[0].plot(range(T), obs[:, 0], label="DGP", color="black", alpha=0.33)
-ax[0].plot(range(T), aug[:, 0], label="Augmented Model", color="blue")
-ax[0].set_title("Output Gap")
-ax[0].legend()
-
-ax[1].plot(range(T), obs[:, 1], label="DGP", color="black", alpha=0.33)
-ax[1].plot(range(T), aug[:, 1], label="Augmented Model", color="blue")
-ax[1].set_title("Inflation")
-ax[1].legend()
-
-ax[2].plot(range(T), obs[:, 2], label="DGP", color="black", alpha=0.33)
-ax[2].plot(range(T), aug[:, 2], label="Augmented Model", color="blue")
-ax[2].set_title("Interest Rate")
-ax[2].legend()
-
-plt.tight_layout()
-plt.show()
-
 
 # %% [markdown]
 # ### Marginal LR Test Conditional on $	heta_0$
@@ -492,38 +295,8 @@ res_mle
 #
 
 # %%
-std_innov_aug = standardize_innovations(kf_aug)
-
-fig, ax = plt.subplots(3, 2, figsize=_FIGSIZE_2D)
-
-plot_acf(std_innov_aug[:, 0], ax=ax[0, 0], lags=20, title="ACF of Output Gap Innovations", label="Augmented Model")
-plot_pacf(std_innov_aug[:, 0], ax=ax[0, 1], lags=20, title="PACF of Output Gap Innovations", label="Augmented Model")
-
-plot_acf(std_innov_aug[:, 1], ax=ax[1, 0], lags=20, title="ACF of Inflation Innovations", label="Augmented Model")
-plot_pacf(std_innov_aug[:, 1], ax=ax[1, 1], lags=20, title="PACF of Inflation Innovations", label="Augmented Model")
-
-plot_acf(std_innov_aug[:, 2], ax=ax[2, 0], lags=20, title="ACF of Interest Rate Innovations", label="Augmented Model")
-plot_pacf(std_innov_aug[:, 2], ax=ax[2, 1], lags=20, title="PACF of Interest Rate Innovations", label="Augmented Model")
-
-plt.tight_layout()
-plt.show()
-
 print("Monte Carlo Ljung-Box summary for the MLE-augmented model:")
-mc_aug["lb_summary"].round(3)
-
-
-# %%
-mu_aug = std_innov_aug.mean(axis=0)
-Sigma_aug = np.cov(std_innov_aug, rowvar=False)
-
-print("Representative mean of augmented model innovations:", mu_aug.round(3), "\n")
-print("Representative covariance of augmented model innovations:\n", Sigma_aug.round(3), "\n")
-print("Monte Carlo average mean vector:\n", mc_aug["moment_mean_vector"].round(3), "\n")
-print("Monte Carlo SE of average means:\n", mc_aug["moment_mean_vector_mc_se"].round(3), "\n")
-print("Monte Carlo average covariance:\n", mc_aug["moment_covariance"].round(3), "\n")
-print("Monte Carlo SE of average covariance:\n", mc_aug["moment_covariance_mc_se"].round(3), "\n")
-print("Max absolute deviations of Monte Carlo average moments:\n", mc_aug["moment_summary"].round(3), "\n")
-print("Monte Carlo SE for selected max-deviation components:\n", mc_aug["moment_summary_mc_se"].round(3), "\n")
+display(mc_aug["lb_summary"].round(3))
 
 
 # %%
@@ -535,13 +308,4 @@ display(mc_aug["moment_specification_test_summary"].round(3))
 
 print("Reference-minus-augmented moment distance comparison:")
 display(mc_aug["moment_specification_comparison"].round(3))
-
-
-# %%
-sol_aug.transition_plot(
-    T=25,
-    observables=True,
-    shocks=["z"],
-    scale=1.0,
-)
 

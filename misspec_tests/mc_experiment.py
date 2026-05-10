@@ -562,14 +562,24 @@ def summarize_average_moments(moment_records: pd.DataFrame) -> pd.Series:
 def summarize_average_moment_mc_se(moment_records: pd.DataFrame) -> pd.Series:
     mean_vector = average_vector(moment_records, "mean")
     covariance = average_matrix(moment_records, "cov")
-    off_diag_covariance = covariance.copy()
-    np.fill_diagonal(off_diag_covariance.values, 0.0)
+    off_diag_covariance_array = covariance.to_numpy(dtype=float, copy=True)
+    np.fill_diagonal(off_diag_covariance_array, 0.0)
+    off_diag_covariance = pd.DataFrame(
+        off_diag_covariance_array,
+        index=covariance.index,
+        columns=covariance.columns,
+    )
 
     max_mean_measurement = mean_vector.abs().idxmax()
     diag_abs = (pd.Series(np.diag(covariance), index=MEASUREMENT_NAMES) - 1.0).abs()
     max_diag_measurement = diag_abs.idxmax()
-    offdiag_abs = off_diag_covariance.abs()
-    np.fill_diagonal(offdiag_abs.values, np.nan)
+    offdiag_abs_array = off_diag_covariance.abs().to_numpy(dtype=float, copy=True)
+    np.fill_diagonal(offdiag_abs_array, np.nan)
+    offdiag_abs = pd.DataFrame(
+        offdiag_abs_array,
+        index=off_diag_covariance.index,
+        columns=off_diag_covariance.columns,
+    )
     max_offdiag_row, max_offdiag_col = offdiag_abs.stack().idxmax()
 
     return pd.Series(
@@ -603,6 +613,7 @@ def newey_west_long_run_covariance(moment_process: np.ndarray, *, bandwidth: int
     if sample_size <= 0:
         raise ValueError("moment_process must contain at least one observation")
 
+    moment_process = moment_process - moment_process.mean(axis=0, keepdims=True)
     omega_hat = (moment_process.T @ moment_process) / sample_size
     max_lag = min(int(bandwidth), sample_size - 1)
     for lag in range(1, max_lag + 1):
@@ -620,14 +631,15 @@ def moment_specification_test_frame(std_innov: np.ndarray, *, replication: int) 
     cov_df = k * (k + 1) / 2
 
     mean_vector = std_innov.mean(axis=0)
-    covariance = np.cov(std_innov, rowvar=False)
+    bandwidth = bartlett_hac_bandwidth(sample_size)
 
     mean_distance = float(np.linalg.norm(mean_vector))
+    mean_omega_hat = newey_west_long_run_covariance(std_innov, bandwidth=bandwidth)
     try:
-        covariance_inv = np.linalg.inv(covariance)
-        mean_stat = float(sample_size * mean_vector @ covariance_inv @ mean_vector)
+        mean_omega_inv = np.linalg.inv(mean_omega_hat)
     except np.linalg.LinAlgError:
-        mean_stat = float(sample_size * mean_vector @ np.linalg.pinv(covariance) @ mean_vector)
+        mean_omega_inv = np.linalg.pinv(mean_omega_hat)
+    mean_stat = float(sample_size * mean_vector @ mean_omega_inv @ mean_vector)
     mean_p_value = float(chi2.sf(mean_stat, df=k))
 
     identity = np.eye(k)
@@ -637,7 +649,6 @@ def moment_specification_test_frame(std_innov: np.ndarray, *, replication: int) 
         dtype=float,
     )
     gbar = moment_process.mean(axis=0)
-    bandwidth = bartlett_hac_bandwidth(sample_size)
     omega_hat = newey_west_long_run_covariance(moment_process, bandwidth=bandwidth)
     try:
         omega_inv = np.linalg.inv(omega_hat)
@@ -651,10 +662,10 @@ def moment_specification_test_frame(std_innov: np.ndarray, *, replication: int) 
         [
             {
                 "replication": replication,
-                "test": "mean_zero_chi2",
+                "test": "mean_zero_hac",
                 "df": k,
                 "sample_size": sample_size,
-                "bandwidth": np.nan,
+                "bandwidth": bandwidth,
                 "distance": mean_distance,
                 "stat": mean_stat,
                 "p_value": mean_p_value,

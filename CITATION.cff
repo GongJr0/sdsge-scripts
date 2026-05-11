@@ -1,0 +1,26 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Reproducibility Scripts
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Ege Güney
+    family-names: Kıymaç
+    email: guneykiymac@gmail.com
+    affiliation: University of Warsaw
+    orcid: 'https://orcid.org/0009-0000-4715-1226'
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.20115561
+    description: Scripts used to produce outputs
+repository-code: 'https://zenodo.org/records/20115561'
+keywords:
+  - reproduction script
+license: MIT
+commit: 19d3b7f1da7285725443e5b279fe2569e9e6c0e1
+version: 1.0.0
+date-released: '2026-05-11'

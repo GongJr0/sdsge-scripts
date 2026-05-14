@@ -67,9 +67,7 @@ def make_filter_kwargs(err_scale: np.ndarray, *, known_r: bool) -> dict[str, np.
     n_obs = int(len(err_scale))
     if known_r:
         return {"R": np.diag(err_scale)}
-    if np.any(np.asarray(err_scale, dtype=float) != 0.0):
-        return {"R": np.zeros((n_obs, n_obs))}
-    return {}
+    return {"R": np.zeros((n_obs, n_obs))}
 
 
 def standardize_innovations(kf: Any) -> np.ndarray:

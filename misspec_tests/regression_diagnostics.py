@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Dict, Mapping, Sequence
 
 import numpy as np
@@ -8,13 +9,14 @@ import pandas as pd
 from scipy.stats import f, t
 from sklearn.metrics import r2_score
 
+from mc_storage import MCRecordBatch
+
 
 @dataclass
 class OLSResult:
     X: np.ndarray
     y_name: str
     x_names: list[str]
-    intercept: bool
     beta: np.ndarray
     fitted: np.ndarray
     resid: np.ndarray
@@ -27,7 +29,7 @@ class OLSResult:
     df_resid: int
 
     def coefficient_table(self, *, drop_intercept: bool = True, round_to: int | None = None) -> pd.DataFrame:
-        names = ["const", *self.x_names] if self.intercept else self.x_names
+        names = ["const", *self.x_names]
         df = pd.DataFrame(
             {
                 "coef": self.beta,
@@ -39,7 +41,7 @@ class OLSResult:
         )
         df.insert(0, "y", self.y_name)
         df.insert(1, "r2", self.r2)
-        if drop_intercept and self.intercept:
+        if drop_intercept:
             df = df.drop(index="const")
         if round_to is not None:
             df = df.round(round_to)
@@ -66,7 +68,7 @@ def _zscore(x: np.ndarray, *, ddof: int = 0) -> np.ndarray:
     return (arr - mean) / std
 
 
-def ols(y: np.ndarray, X: np.ndarray, *, intercept: bool = True, y_name: str = "y", x_names: Sequence[str] | None = None) -> OLSResult:
+def ols(y: np.ndarray, X: np.ndarray, *, y_name: str = "y", x_names: Sequence[str] | None = None) -> OLSResult:
     y = np.asarray(y, dtype=float).reshape(-1)
     X = _as_2d(np.asarray(X, dtype=float))
 
@@ -75,7 +77,7 @@ def ols(y: np.ndarray, X: np.ndarray, *, intercept: bool = True, y_name: str = "
     else:
         x_names = list(x_names)
 
-    X_reg = np.column_stack([np.ones(X.shape[0]), X]) if intercept else X
+    X_reg = np.column_stack([np.ones(X.shape[0]), X])
     beta = np.linalg.lstsq(X_reg, y, rcond=None)[0]
     fitted = X_reg @ beta
     resid = y - fitted
@@ -97,7 +99,6 @@ def ols(y: np.ndarray, X: np.ndarray, *, intercept: bool = True, y_name: str = "
         X=X_reg,
         y_name=y_name,
         x_names=x_names,
-        intercept=intercept,
         beta=beta,
         fitted=fitted,
         resid=resid,
@@ -124,21 +125,18 @@ def standardized_slope_from_model(
     raw_model: OLSResult,
     x: np.ndarray,
     y: np.ndarray,
-    intercept: bool,
     z_score_standardization: bool = False,
 ) -> float:
-    slope_idx = 1 if intercept else 0
     if not z_score_standardization:
-        return standardized_slope_from_stds(raw_model.beta[slope_idx], x, y)
+        return standardized_slope_from_stds(raw_model.beta[1], x, y)
 
     z_model = ols(
         y=_zscore(np.asarray(y, dtype=float).reshape(-1)),
         X=_zscore(_as_2d(x)),
-        intercept=intercept,
         y_name=raw_model.y_name,
         x_names=raw_model.x_names,
     )
-    return float(z_model.beta[slope_idx])
+    return float(z_model.beta[1])
 
 
 @dataclass
@@ -146,7 +144,7 @@ class OrthogonalizationBundle:
     residuals: Dict[str, np.ndarray]
     models: Dict[str, OLSResult]
 
-    def summary_table(self, *, round_to: int | None = None) -> pd.DataFrame:
+    def summary_records(self) -> MCRecordBatch:
         rows = []
         for target, model in self.models.items():
             formula = f"{target} ~ " + " + ".join(model.x_names)
@@ -165,7 +163,6 @@ class OrthogonalizationBundle:
                     reduced_model = ols(
                         y=y,
                         X=X_reduced[:, 1:] if X_reduced.shape[1] > 1 else np.empty((len(y), 0)),
-                        intercept=True,
                         y_name=target,
                         x_names=remaining_x_names,
                     )
@@ -187,7 +184,23 @@ class OrthogonalizationBundle:
                     }
                 )
 
-        df = pd.DataFrame(rows)
+        return MCRecordBatch.from_records(
+            rows,
+            columns=[
+                "target",
+                "model",
+                "regressor",
+                "coef",
+                "std_error",
+                "t_stat",
+                "p_value",
+                "r2",
+                "marginal_r2",
+            ],
+        )
+
+    def summary_table(self, *, round_to: int | None = None) -> pd.DataFrame:
+        df = self.summary_records().to_frame()
         if round_to is not None:
             df = df.round(round_to)
         return df
@@ -195,24 +208,71 @@ class OrthogonalizationBundle:
 
 @dataclass
 class MeasurementRegressionBundle:
-    raw: pd.DataFrame
-    pivot_coef: pd.DataFrame
-    pivot_standardized_coef: pd.DataFrame
-    pivot_p_value: pd.DataFrame
-    pivot_std_error: pd.DataFrame
-    pivot_r2: pd.DataFrame
+    records: MCRecordBatch
+    predictor_names: list[str]
+    measurement_names: list[str]
+
+    @cached_property
+    def raw(self) -> pd.DataFrame:
+        return self.records.to_frame()
+
+    def _pivot(self, value: str) -> pd.DataFrame:
+        return self.raw.pivot(index="predictor", columns="measurement", values=value).reindex(
+            index=self.predictor_names,
+            columns=self.measurement_names,
+        )
+
+    @cached_property
+    def pivot_coef(self) -> pd.DataFrame:
+        return self._pivot("coef")
+
+    @cached_property
+    def pivot_standardized_coef(self) -> pd.DataFrame:
+        return self._pivot("standardized_coef")
+
+    @cached_property
+    def pivot_p_value(self) -> pd.DataFrame:
+        return self._pivot("p_value")
+
+    @cached_property
+    def pivot_std_error(self) -> pd.DataFrame:
+        return self._pivot("std_error")
+
+    @cached_property
+    def pivot_r2(self) -> pd.DataFrame:
+        return self._pivot("r2")
 
 
 @dataclass
 class LagBlockRegressionBundle:
-    raw: pd.DataFrame
-    coefficients: pd.DataFrame
+    records: MCRecordBatch
+    coefficient_records: MCRecordBatch
+
+    @cached_property
+    def raw(self) -> pd.DataFrame:
+        return self.records.to_frame()
+
+    @cached_property
+    def coefficients(self) -> pd.DataFrame:
+        return self.coefficient_records.to_frame()
 
 
 @dataclass
 class SinglePredictorRegressionBundle:
-    raw: pd.DataFrame
-    by_measurement: Dict[str, pd.DataFrame]
+    records: MCRecordBatch
+
+    @cached_property
+    def raw(self) -> pd.DataFrame:
+        return self.records.to_frame()
+
+    @cached_property
+    def by_measurement(self) -> Dict[str, pd.DataFrame]:
+        if self.raw.empty:
+            return {}
+        return {
+            str(measurement): group.drop(columns=["measurement"]).set_index("predictor")
+            for measurement, group in self.raw.groupby("measurement", sort=False, dropna=False)
+        }
 
 
 STATE_NAME_MAP_DEFAULT = {2: "r", 3: "x", 4: "Pi"}
@@ -285,8 +345,6 @@ def _block_wald_test(model: OLSResult, coefficient_indices: Sequence[int]) -> di
 def orthogonalize_predictors(
     data: Mapping[str, np.ndarray],
     orthogonalization_map: Mapping[str, Sequence[str]],
-    *,
-    intercept: bool = True,
 ) -> OrthogonalizationBundle:
     residuals: Dict[str, np.ndarray] = {}
     models: Dict[str, OLSResult] = {}
@@ -295,7 +353,6 @@ def orthogonalize_predictors(
         model = ols(
             y=np.asarray(data[target], dtype=float),
             X=np.column_stack([np.asarray(data[c], dtype=float).reshape(-1) for c in controls]),
-            intercept=intercept,
             y_name=target,
             x_names=list(controls),
         )
@@ -310,7 +367,6 @@ def run_measurement_lag_block_regressions(
     predictors: Mapping[str, np.ndarray],
     *,
     lag_order: int | None = None,
-    intercept: bool = True,
 ) -> LagBlockRegressionBundle:
     block_rows = []
     coefficient_rows = []
@@ -325,11 +381,10 @@ def run_measurement_lag_block_regressions(
             model = ols(
                 y=y_aligned,
                 X=X_lagged,
-                intercept=intercept,
                 y_name=measurement_name,
                 x_names=x_names,
             )
-            first_slope_idx = 1 if intercept else 0
+            first_slope_idx = 1
             block_indices = list(range(first_slope_idx, first_slope_idx + len(x_names)))
             block_test = _block_wald_test(model, block_indices)
 
@@ -337,7 +392,6 @@ def run_measurement_lag_block_regressions(
                 {
                     "measurement": measurement_name,
                     "predictor": predictor_name,
-                    "intercept": intercept,
                     "lag_order": selected_lag_order,
                     "sample_size": model.nobs,
                     "n_block_coefficients": len(x_names),
@@ -363,7 +417,6 @@ def run_measurement_lag_block_regressions(
                         "predictor": predictor_name,
                         "lag": lag,
                         "term": term_name,
-                        "intercept": intercept,
                         "lag_order": selected_lag_order,
                         "sample_size": model.nobs,
                         "coef": model.beta[slope_idx],
@@ -385,8 +438,49 @@ def run_measurement_lag_block_regressions(
                 )
 
     return LagBlockRegressionBundle(
-        raw=pd.DataFrame(block_rows),
-        coefficients=pd.DataFrame(coefficient_rows),
+        records=MCRecordBatch.from_records(
+            block_rows,
+            columns=[
+                "measurement",
+                "predictor",
+                "lag_order",
+                "sample_size",
+                "n_block_coefficients",
+                "coef",
+                "standardized_coef",
+                "std_error",
+                "t_stat",
+                "coef_p_value",
+                "r2",
+                "block_wald_stat",
+                "block_f_stat",
+                "p_value",
+                "df_num",
+                "df_denom",
+            ],
+        ),
+        coefficient_records=MCRecordBatch.from_records(
+            coefficient_rows,
+            columns=[
+                "measurement",
+                "predictor",
+                "lag",
+                "term",
+                "lag_order",
+                "sample_size",
+                "coef",
+                "standardized_coef",
+                "std_error",
+                "t_stat",
+                "p_value",
+                "r2",
+                "block_wald_stat",
+                "block_f_stat",
+                "block_p_value",
+                "df_num",
+                "df_denom",
+            ],
+        ),
     )
 
 
@@ -395,7 +489,6 @@ def run_measurement_regressions(
     measurements: Mapping[str, np.ndarray],
     predictors: Mapping[str, np.ndarray],
     *,
-    intercept: bool = True,
     z_score_standardization: bool = False,
 ) -> MeasurementRegressionBundle:
     rows = []
@@ -409,22 +502,19 @@ def run_measurement_regressions(
             model = ols(
                 y=y_vec,
                 X=x_arr,
-                intercept=intercept,
                 y_name=measurement_name,
                 x_names=[predictor_name],
             )
-            slope_idx = 1 if intercept else 0
+            slope_idx = 1
             rows.append(
                 {
                     "measurement": measurement_name,
                     "predictor": predictor_name,
-                    "intercept": intercept,
                     "coef": model.beta[slope_idx],
                     "standardized_coef": standardized_slope_from_model(
                         raw_model=model,
                         x=x_arr,
                         y=y_vec,
-                        intercept=intercept,
                         z_score_standardization=z_score_standardization,
                     ),
                     "std_error": model.se[slope_idx],
@@ -434,15 +524,22 @@ def run_measurement_regressions(
                 }
             )
 
-    raw = pd.DataFrame(rows)
-    pivot_kwargs = dict(index="predictor", columns="measurement")
     return MeasurementRegressionBundle(
-        raw=raw,
-        pivot_coef=raw.pivot(**pivot_kwargs, values="coef").reindex(index=predictor_names, columns=measurement_names),
-        pivot_standardized_coef=raw.pivot(**pivot_kwargs, values="standardized_coef").reindex(index=predictor_names, columns=measurement_names),
-        pivot_p_value=raw.pivot(**pivot_kwargs, values="p_value").reindex(index=predictor_names, columns=measurement_names),
-        pivot_std_error=raw.pivot(**pivot_kwargs, values="std_error").reindex(index=predictor_names, columns=measurement_names),
-        pivot_r2=raw.pivot(**pivot_kwargs, values="r2").reindex(index=predictor_names, columns=measurement_names),
+        records=MCRecordBatch.from_records(
+            rows,
+            columns=[
+                "measurement",
+                "predictor",
+                "coef",
+                "standardized_coef",
+                "std_error",
+                "t_stat",
+                "p_value",
+                "r2",
+            ],
+        ),
+        predictor_names=predictor_names,
+        measurement_names=measurement_names,
     )
 
 
@@ -451,35 +548,29 @@ def run_single_predictor_reports(
     measurements: Mapping[str, np.ndarray],
     predictors: Mapping[str, np.ndarray],
     *,
-    intercept: bool = True,
     z_score_standardization: bool = False,
 ) -> SinglePredictorRegressionBundle:
     rows = []
-    by_measurement: Dict[str, pd.DataFrame] = {}
 
     for measurement_name, y in measurements.items():
         y_vec = np.asarray(y, dtype=float).reshape(-1)
-        measurement_rows = []
         for predictor_name, x in predictors.items():
             x_arr = _as_2d(np.asarray(x, dtype=float))
             model = ols(
                 y=y_vec,
                 X=x_arr,
-                intercept=intercept,
                 y_name=measurement_name,
                 x_names=[predictor_name],
             )
-            slope_idx = 1 if intercept else 0
+            slope_idx = 1
             row = {
                 "measurement": measurement_name,
                 "predictor": predictor_name,
-                "intercept": intercept,
                 "coef": model.beta[slope_idx],
                 "standardized_coef": standardized_slope_from_model(
                     raw_model=model,
                     x=x_arr,
                     y=y_vec,
-                    intercept=intercept,
                     z_score_standardization=z_score_standardization,
                 ),
                 "r2": model.r2,
@@ -488,10 +579,22 @@ def run_single_predictor_reports(
                 "p_value": model.p_value[slope_idx],
             }
             rows.append(row)
-            measurement_rows.append(row)
-        by_measurement[measurement_name] = pd.DataFrame(measurement_rows).set_index("predictor")
 
-    return SinglePredictorRegressionBundle(raw=pd.DataFrame(rows), by_measurement=by_measurement)
+    return SinglePredictorRegressionBundle(
+        records=MCRecordBatch.from_records(
+            rows,
+            columns=[
+                "measurement",
+                "predictor",
+                "coef",
+                "standardized_coef",
+                "r2",
+                "std_error",
+                "t_stat",
+                "p_value",
+            ],
+        )
+    )
 
 
 
@@ -501,8 +604,8 @@ def run_full_regression_diagnostics(
     state_name_map: Mapping[int, str] | None = None,
     measurement_name_map: Mapping[int, str] | None = None,
     orthogonalization_map: Mapping[str, Sequence[str]] | None = None,
-    intercept: bool = True,
     z_score_standardization: bool = False,
+    include_single_predictor_reports: bool = True,
 ) -> dict[str, object]:
     state_name_map = state_name_map or STATE_NAME_MAP_DEFAULT
     measurement_name_map = measurement_name_map or MEASUREMENT_NAME_MAP_DEFAULT
@@ -510,45 +613,28 @@ def run_full_regression_diagnostics(
 
     raw_states = extract_state_dict(kf, state_name_map)
     measurements = extract_measurement_dict(kf, measurement_name_map)
-    orth_bundle = orthogonalize_predictors(raw_states, orthogonalization_map, intercept=intercept)
+    orth_bundle = orthogonalize_predictors(raw_states, orthogonalization_map)
 
     raw_measurement_regs = run_measurement_regressions(
         measurements,
         raw_states,
-        intercept=intercept,
         z_score_standardization=z_score_standardization,
     )
     orth_measurement_regs = run_measurement_regressions(
         measurements,
         orth_bundle.residuals,
-        intercept=intercept,
         z_score_standardization=z_score_standardization,
     )
     raw_lag_block_regs = run_measurement_lag_block_regressions(
         measurements,
         raw_states,
-        intercept=intercept,
     )
     orth_lag_block_regs = run_measurement_lag_block_regressions(
         measurements,
         orth_bundle.residuals,
-        intercept=intercept,
     )
 
-    raw_single_predictor = run_single_predictor_reports(
-        measurements,
-        raw_states,
-        intercept=intercept,
-        z_score_standardization=z_score_standardization,
-    )
-    orth_single_predictor = run_single_predictor_reports(
-        measurements,
-        orth_bundle.residuals,
-        intercept=intercept,
-        z_score_standardization=z_score_standardization,
-    )
-
-    return {
+    out: dict[str, object] = {
         "states": raw_states,
         "measurements": measurements,
         "orthogonalization": orth_bundle,
@@ -556,10 +642,20 @@ def run_full_regression_diagnostics(
         "measurement_regressions_orthogonalized": orth_measurement_regs,
         "measurement_lag_block_regressions_raw": raw_lag_block_regs,
         "measurement_lag_block_regressions_orthogonalized": orth_lag_block_regs,
-        "single_predictor_reports_raw": raw_single_predictor,
-        "single_predictor_reports_orthogonalized": orth_single_predictor,
         "z_score_standardization": z_score_standardization,
     }
+    if include_single_predictor_reports:
+        out["single_predictor_reports_raw"] = run_single_predictor_reports(
+            measurements,
+            raw_states,
+            z_score_standardization=z_score_standardization,
+        )
+        out["single_predictor_reports_orthogonalized"] = run_single_predictor_reports(
+            measurements,
+            orth_bundle.residuals,
+            z_score_standardization=z_score_standardization,
+        )
+    return out
 
 
 

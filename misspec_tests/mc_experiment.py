@@ -13,6 +13,7 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 
 from SymbolicDSGE import Shock
 
+from mc_storage import AugmentationTable, MCRecordBatch, MCTableStore, ReferenceTable
 from regression_diagnostics import run_full_regression_diagnostics
 
 
@@ -297,7 +298,7 @@ def _centered_slope(y: np.ndarray, x: np.ndarray) -> float:
     return float((x_centered @ y_centered) / denom)
 
 
-def innovation_decomposition_records(
+def innovation_decomposition_record_batch(
     sol_kf: Any,
     sol_dgp: Any,
     sim_dgp: Mapping[str, np.ndarray],
@@ -305,9 +306,9 @@ def innovation_decomposition_records(
     kf: Any,
     predictors: Mapping[str, np.ndarray],
     *,
-    replication: int,
+    replication: int | None = None,
     structure: str,
-) -> pd.DataFrame:
+) -> MCRecordBatch:
     obs_arr = np.asarray(obs, dtype=float)
     innov = np.asarray(kf.innov, dtype=float)
     x_pred = np.asarray(kf.x_pred, dtype=float)
@@ -341,7 +342,6 @@ def innovation_decomposition_records(
             beta_component_gap = beta_total - beta_component_sum
             rows.append(
                 {
-                    "replication": replication,
                     "structure": structure,
                     "measurement": measurement_name,
                     "predictor": predictor_name,
@@ -355,7 +355,47 @@ def innovation_decomposition_records(
                 }
             )
 
-    return pd.DataFrame(rows)
+    columns = [
+        "structure",
+        "measurement",
+        "predictor",
+        "beta_measurement_error",
+        "beta_state_prediction_error",
+        "beta_total_innovation",
+        "beta_component_sum",
+        "beta_component_gap",
+        "abs_beta_component_gap",
+        "reconstruction_max_abs_error",
+    ]
+    if replication is not None:
+        rows = [{"replication": replication, **row} for row in rows]
+        columns = ["replication", *columns]
+
+    return MCRecordBatch.from_records(rows, columns=columns)
+
+
+def innovation_decomposition_records(
+    sol_kf: Any,
+    sol_dgp: Any,
+    sim_dgp: Mapping[str, np.ndarray],
+    obs: np.ndarray,
+    kf: Any,
+    predictors: Mapping[str, np.ndarray],
+    *,
+    replication: int,
+    structure: str,
+) -> pd.DataFrame:
+    out = innovation_decomposition_record_batch(
+        sol_kf,
+        sol_dgp,
+        sim_dgp,
+        obs,
+        kf,
+        predictors,
+        replication=replication,
+        structure=structure,
+    ).to_frame()
+    return out
 
 
 def compare_regression_setups(
@@ -419,66 +459,6 @@ def compare_regression_setups(
         )
     )
     return comparison.merge(paired_summary, on=group_cols, how="left")
-
-
-def size_adjusted_power_comparison(
-    size_records_by_setup: Mapping[str, pd.DataFrame],
-    power_records_by_setup: Mapping[str, pd.DataFrame],
-    *,
-    group_cols: list[str],
-    alpha: float = ALPHA_DEFAULT,
-    p_value_col: str = "p_value",
-) -> pd.DataFrame:
-    """Calibrate each setup's p-value cutoff on size records, then apply it to power records."""
-    rows = []
-    for setup_name, size_records in size_records_by_setup.items():
-        power_records = power_records_by_setup.get(setup_name)
-        if power_records is None or size_records.empty or power_records.empty:
-            continue
-
-        thresholds = (
-            size_records.dropna(subset=[p_value_col])
-            .groupby(group_cols, sort=False, dropna=False)[p_value_col]
-            .quantile(alpha)
-            .reset_index(name="size_adjusted_p_value_cutoff")
-        )
-        if thresholds.empty:
-            continue
-
-        size_eval = size_records.merge(thresholds, on=group_cols, how="inner")
-        power_eval = power_records.merge(thresholds, on=group_cols, how="inner")
-        size_eval["size_reject"] = size_eval[p_value_col] <= size_eval["size_adjusted_p_value_cutoff"]
-        power_eval["power_reject"] = power_eval[p_value_col] <= power_eval["size_adjusted_p_value_cutoff"]
-
-        for key, power_group in power_eval.groupby(group_cols, sort=False, dropna=False):
-            key_tuple = key if isinstance(key, tuple) else (key,)
-            selector = np.ones(len(size_eval), dtype=bool)
-            for col, value in zip(group_cols, key_tuple):
-                selector &= size_eval[col].eq(value).to_numpy()
-            size_group = size_eval.loc[selector]
-            n_power = int(len(power_group))
-            n_power_reject = int(power_group["power_reject"].sum())
-            ci_low, ci_high = wilson_interval(n_power_reject, n_power, alpha=alpha)
-            row = {
-                col: value for col, value in zip(group_cols, key_tuple)
-            }
-            row.update(
-                {
-                    "setup": setup_name,
-                    "size_adjusted_p_value_cutoff": float(power_group["size_adjusted_p_value_cutoff"].iloc[0]),
-                    "empirical_size": float(size_group["size_reject"].mean()),
-                    "n_size_replications": int(len(size_group)),
-                    "size_adjusted_power": n_power_reject / n_power if n_power else np.nan,
-                    "size_adjusted_power_mc_se": rejection_rate_standard_error(n_power_reject, n_power),
-                    "size_adjusted_power_ci_low": ci_low,
-                    "size_adjusted_power_ci_high": ci_high,
-                    "n_power_replications": n_power,
-                    "n_power_rejections": n_power_reject,
-                }
-            )
-            rows.append(row)
-
-    return pd.DataFrame(rows)
 
 
 def summarize_moment_record(std_innov: np.ndarray) -> dict[str, float]:
@@ -623,7 +603,11 @@ def newey_west_long_run_covariance(moment_process: np.ndarray, *, bandwidth: int
     return 0.5 * (omega_hat + omega_hat.T)
 
 
-def moment_specification_test_frame(std_innov: np.ndarray, *, replication: int) -> pd.DataFrame:
+def moment_specification_test_records(
+    std_innov: np.ndarray,
+    *,
+    replication: int | None = None,
+) -> MCRecordBatch:
     std_innov = np.asarray(std_innov, dtype=float)
     sample_size, k = std_innov.shape
     cov_df = k * (k + 1) / 2
@@ -656,10 +640,8 @@ def moment_specification_test_frame(std_innov: np.ndarray, *, replication: int) 
     cov_p_value = float(chi2.sf(cov_stat, df=cov_df))
     cov_distance = float(np.linalg.norm(second_moment - identity, ord="fro"))
 
-    return pd.DataFrame(
-        [
-            {
-                "replication": replication,
+    rows = [
+        {
                 "test": "mean_zero_hac",
                 "df": k,
                 "sample_size": sample_size,
@@ -667,9 +649,8 @@ def moment_specification_test_frame(std_innov: np.ndarray, *, replication: int) 
                 "distance": mean_distance,
                 "stat": mean_stat,
                 "p_value": mean_p_value,
-            },
-            {
-                "replication": replication,
+        },
+        {
                 "test": "cov_identity",
                 "df": cov_df,
                 "sample_size": sample_size,
@@ -677,9 +658,26 @@ def moment_specification_test_frame(std_innov: np.ndarray, *, replication: int) 
                 "distance": cov_distance,
                 "stat": cov_stat,
                 "p_value": cov_p_value,
-            },
-        ]
-    )
+        },
+    ]
+    columns = [
+            "test",
+            "df",
+            "sample_size",
+            "bandwidth",
+            "distance",
+            "stat",
+            "p_value",
+    ]
+    if replication is not None:
+        rows = [{"replication": replication, **row} for row in rows]
+        columns = ["replication", *columns]
+
+    return MCRecordBatch.from_records(rows, columns=columns)
+
+
+def moment_specification_test_frame(std_innov: np.ndarray, *, replication: int) -> pd.DataFrame:
+    return moment_specification_test_records(std_innov, replication=replication).to_frame()
 
 
 def summarize_moment_specification_tests(
@@ -751,7 +749,7 @@ def summarize_moment_specification_comparison(
     return pd.DataFrame(rows)
 
 
-def lb_test_frame(std_innov: np.ndarray, *, alpha: float = ALPHA_DEFAULT, lags: int = LJUNG_BOX_LAGS) -> pd.DataFrame:
+def lb_test_records(std_innov: np.ndarray, *, alpha: float = ALPHA_DEFAULT, lags: int = LJUNG_BOX_LAGS) -> MCRecordBatch:
     rows = []
     for idx, measurement in enumerate(MEASUREMENT_NAMES):
         test = acorr_ljungbox(std_innov[:, idx], lags=lags)
@@ -762,7 +760,11 @@ def lb_test_frame(std_innov: np.ndarray, *, alpha: float = ALPHA_DEFAULT, lags: 
                 "p_value": float(test["lb_pvalue"].iloc[0]),
             }
         )
-    return pd.DataFrame(rows)
+    return MCRecordBatch.from_records(rows, columns=["measurement", "lb_stat", "p_value"])
+
+
+def lb_test_frame(std_innov: np.ndarray, *, alpha: float = ALPHA_DEFAULT, lags: int = LJUNG_BOX_LAGS) -> pd.DataFrame:
+    return lb_test_records(std_innov, alpha=alpha, lags=lags).to_frame()
 
 
 def simulate_obs(
@@ -803,22 +805,13 @@ def summarize_reference_experiment(
     mc_samples: int,
     known_r: bool,
     alpha: float = ALPHA_DEFAULT,
+    summary_only: bool = False,
+    include_by_predictor: bool = True,
 ) -> dict[str, Any]:
     err_scale = np.asarray(err_var, dtype=float) * float(meas_err_scale)
     filter_kwargs = make_filter_kwargs(err_scale, known_r=known_r)
 
-    lb_rows: list[pd.DataFrame] = []
-    moment_rows: list[dict[str, float]] = []
-    moment_spec_rows: list[pd.DataFrame] = []
-    orth_rows: list[pd.DataFrame] = []
-    raw_reg_rows: list[pd.DataFrame] = []
-    orth_reg_rows: list[pd.DataFrame] = []
-    raw_lag_block_rows: list[pd.DataFrame] = []
-    orth_lag_block_rows: list[pd.DataFrame] = []
-    raw_lag_block_coefficient_rows: list[pd.DataFrame] = []
-    orth_lag_block_coefficient_rows: list[pd.DataFrame] = []
-    raw_decomposition_rows: list[pd.DataFrame] = []
-    orth_decomposition_rows: list[pd.DataFrame] = []
+    records = MCTableStore(mc_samples)
     representative: ReferenceRepresentative | None = None
     seed_counter = make_seed_counter()
 
@@ -832,45 +825,67 @@ def summarize_reference_experiment(
         )
         std_innov = standardize_innovations(kf)
 
-        lb_df = lb_test_frame(std_innov, alpha=alpha)
-        lb_df["replication"] = replication
-        lb_rows.append(lb_df)
+        records.append(ReferenceTable.LB, replication, lb_test_records(std_innov, alpha=alpha))
 
-        moment_rows.append({"replication": replication, **summarize_moment_record(std_innov)})
-        moment_spec_rows.append(moment_specification_test_frame(std_innov, replication=replication))
+        records.append(
+            ReferenceTable.MOMENT,
+            replication,
+            {"replication": replication, **summarize_moment_record(std_innov)},
+        )
+        records.append(
+            ReferenceTable.MOMENT_SPEC,
+            replication,
+            moment_specification_test_records(std_innov, replication=replication),
+        )
 
-        reg_diag = run_full_regression_diagnostics(kf)
+        reg_diag = run_full_regression_diagnostics(kf, include_single_predictor_reports=False)
 
-        orth_df = reg_diag["orthogonalization"].summary_table(round_to=None)
-        orth_df["replication"] = replication
-        orth_rows.append(orth_df)
+        records.append(
+            ReferenceTable.ORTHOGONALIZATION,
+            replication,
+            reg_diag["orthogonalization"].summary_records(),
+        )
 
-        raw_df = reg_diag["measurement_regressions_raw"].raw.copy()
-        raw_df["replication"] = replication
-        raw_reg_rows.append(raw_df)
+        records.append(
+            ReferenceTable.RAW_REGRESSION,
+            replication,
+            reg_diag["measurement_regressions_raw"].records,
+        )
 
-        orth_reg_df = reg_diag["measurement_regressions_orthogonalized"].raw.copy()
-        orth_reg_df["replication"] = replication
-        orth_reg_rows.append(orth_reg_df)
+        records.append(
+            ReferenceTable.ORTH_REGRESSION,
+            replication,
+            reg_diag["measurement_regressions_orthogonalized"].records,
+        )
 
-        raw_lag_block_df = reg_diag["measurement_lag_block_regressions_raw"].raw.copy()
-        raw_lag_block_df["replication"] = replication
-        raw_lag_block_rows.append(raw_lag_block_df)
+        records.append(
+            ReferenceTable.RAW_LAG_BLOCK,
+            replication,
+            reg_diag["measurement_lag_block_regressions_raw"].records,
+        )
 
-        orth_lag_block_df = reg_diag["measurement_lag_block_regressions_orthogonalized"].raw.copy()
-        orth_lag_block_df["replication"] = replication
-        orth_lag_block_rows.append(orth_lag_block_df)
+        records.append(
+            ReferenceTable.ORTH_LAG_BLOCK,
+            replication,
+            reg_diag["measurement_lag_block_regressions_orthogonalized"].records,
+        )
 
-        raw_lag_block_coefs_df = reg_diag["measurement_lag_block_regressions_raw"].coefficients.copy()
-        raw_lag_block_coefs_df["replication"] = replication
-        raw_lag_block_coefficient_rows.append(raw_lag_block_coefs_df)
+        records.append(
+            ReferenceTable.RAW_LAG_COEFFICIENT,
+            replication,
+            reg_diag["measurement_lag_block_regressions_raw"].coefficient_records,
+        )
 
-        orth_lag_block_coefs_df = reg_diag["measurement_lag_block_regressions_orthogonalized"].coefficients.copy()
-        orth_lag_block_coefs_df["replication"] = replication
-        orth_lag_block_coefficient_rows.append(orth_lag_block_coefs_df)
+        records.append(
+            ReferenceTable.ORTH_LAG_COEFFICIENT,
+            replication,
+            reg_diag["measurement_lag_block_regressions_orthogonalized"].coefficient_records,
+        )
 
-        raw_decomposition_rows.append(
-            innovation_decomposition_records(
+        records.append(
+            ReferenceTable.RAW_DECOMPOSITION,
+            replication,
+            innovation_decomposition_record_batch(
                 sol,
                 sol_dgp,
                 sim_dgp,
@@ -879,10 +894,12 @@ def summarize_reference_experiment(
                 reg_diag["states"],
                 replication=replication,
                 structure="raw",
-            )
+            ),
         )
-        orth_decomposition_rows.append(
-            innovation_decomposition_records(
+        records.append(
+            ReferenceTable.ORTH_DECOMPOSITION,
+            replication,
+            innovation_decomposition_record_batch(
                 sol,
                 sol_dgp,
                 sim_dgp,
@@ -891,7 +908,7 @@ def summarize_reference_experiment(
                 reg_diag["orthogonalization"].residuals,
                 replication=replication,
                 structure="orthogonalized",
-            )
+            ),
         )
 
         if representative is None:
@@ -903,26 +920,125 @@ def summarize_reference_experiment(
                 err_scale=err_scale.copy(),
             )
 
-    lb_records = pd.concat(lb_rows, ignore_index=True)
-    moment_records = pd.DataFrame(moment_rows)
-    moment_spec_tests = pd.concat(moment_spec_rows, ignore_index=True)
-    orth_records = pd.concat(orth_rows, ignore_index=True)
-    raw_reg_records = pd.concat(raw_reg_rows, ignore_index=True)
-    orth_reg_records = pd.concat(orth_reg_rows, ignore_index=True)
-    raw_lag_block_records = pd.concat(raw_lag_block_rows, ignore_index=True)
-    orth_lag_block_records = pd.concat(orth_lag_block_rows, ignore_index=True)
-    raw_lag_block_coefficient_records = pd.concat(raw_lag_block_coefficient_rows, ignore_index=True)
-    orth_lag_block_coefficient_records = pd.concat(orth_lag_block_coefficient_rows, ignore_index=True)
-    raw_decomposition_records = pd.concat(raw_decomposition_rows, ignore_index=True)
-    orth_decomposition_records = pd.concat(orth_decomposition_rows, ignore_index=True)
+    if summary_only:
+        out: dict[str, Any] = {
+            "representative": representative,
+            "filter_kwargs": filter_kwargs,
+            "err_scale": err_scale,
+        }
 
-    return {
+        lb_records = records.frame(ReferenceTable.LB)
+        out["lb_summary"] = aggregate_scalar_frame(lb_records, ["measurement"], alpha=alpha)
+        del lb_records
+
+        moment_records = records.frame(ReferenceTable.MOMENT)
+        out["moment_summary"] = summarize_average_moments(moment_records)
+        out["moment_summary_mc_se"] = summarize_average_moment_mc_se(moment_records)
+        out["moment_mean_vector"] = average_vector(moment_records, "mean")
+        out["moment_mean_vector_mc_se"] = average_vector_mc_se(moment_records, "mean")
+        out["moment_covariance"] = average_matrix(moment_records, "cov")
+        out["moment_covariance_mc_se"] = average_matrix_mc_se(moment_records, "cov")
+        out["moment_correlation"] = average_matrix(moment_records, "corr")
+        out["moment_correlation_mc_se"] = average_matrix_mc_se(moment_records, "corr")
+        del moment_records
+
+        moment_spec_tests = records.frame(ReferenceTable.MOMENT_SPEC)
+        out["moment_specification_test_summary"] = summarize_moment_specification_tests(
+            moment_spec_tests,
+            alpha=alpha,
+        )
+        del moment_spec_tests
+
+        orth_records = records.frame(ReferenceTable.ORTHOGONALIZATION)
+        out["orthogonalization_summary"] = add_rejection_summary(
+            orth_records,
+            ["target", "regressor"],
+            alpha=alpha,
+        )
+        del orth_records
+
+        raw_reg_records = records.frame(ReferenceTable.RAW_REGRESSION)
+        out["measurement_regressions_raw_summary"] = add_rejection_summary(
+            raw_reg_records,
+            ["measurement", "predictor"],
+            alpha=alpha,
+        )
+        raw_lag_block_records = records.frame(ReferenceTable.RAW_LAG_BLOCK)
+        out["measurement_lag_block_regressions_raw_summary"] = add_rejection_summary(
+            raw_lag_block_records,
+            ["measurement", "predictor"],
+            alpha=alpha,
+        )
+        out["measurement_regression_setup_comparison_raw"] = compare_regression_setups(
+            raw_reg_records,
+            raw_lag_block_records,
+            baseline_name="contemporaneous",
+            candidate_name="lag_block",
+            group_cols=["measurement", "predictor"],
+            alpha=alpha,
+        )
+        del raw_reg_records, raw_lag_block_records
+
+        orth_reg_records = records.frame(ReferenceTable.ORTH_REGRESSION)
+        out["measurement_regressions_orthogonalized_summary"] = add_rejection_summary(
+            orth_reg_records,
+            ["measurement", "predictor"],
+            alpha=alpha,
+        )
+        orth_lag_block_records = records.frame(ReferenceTable.ORTH_LAG_BLOCK)
+        out["measurement_lag_block_regressions_orthogonalized_summary"] = add_rejection_summary(
+            orth_lag_block_records,
+            ["measurement", "predictor"],
+            alpha=alpha,
+        )
+        out["measurement_regression_setup_comparison_orthogonalized"] = compare_regression_setups(
+            orth_reg_records,
+            orth_lag_block_records,
+            baseline_name="contemporaneous",
+            candidate_name="lag_block",
+            group_cols=["measurement", "predictor"],
+            alpha=alpha,
+        )
+        del orth_reg_records, orth_lag_block_records
+
+        raw_decomposition_records = records.frame(ReferenceTable.RAW_DECOMPOSITION)
+        out["innovation_decomposition_raw_summary"] = aggregate_scalar_frame(
+            raw_decomposition_records,
+            ["measurement", "predictor"],
+            value_cols=INNOVATION_DECOMPOSITION_VALUE_COLUMNS,
+            alpha=alpha,
+        )
+        del raw_decomposition_records
+
+        orth_decomposition_records = records.frame(ReferenceTable.ORTH_DECOMPOSITION)
+        out["innovation_decomposition_orthogonalized_summary"] = aggregate_scalar_frame(
+            orth_decomposition_records,
+            ["measurement", "predictor"],
+            value_cols=INNOVATION_DECOMPOSITION_VALUE_COLUMNS,
+            alpha=alpha,
+        )
+        del orth_decomposition_records
+
+        return out
+
+    lb_records = records.frame(ReferenceTable.LB)
+    moment_records = records.frame(ReferenceTable.MOMENT)
+    moment_spec_tests = records.frame(ReferenceTable.MOMENT_SPEC)
+    orth_records = records.frame(ReferenceTable.ORTHOGONALIZATION)
+    raw_reg_records = records.frame(ReferenceTable.RAW_REGRESSION)
+    orth_reg_records = records.frame(ReferenceTable.ORTH_REGRESSION)
+    raw_lag_block_records = records.frame(ReferenceTable.RAW_LAG_BLOCK)
+    orth_lag_block_records = records.frame(ReferenceTable.ORTH_LAG_BLOCK)
+    raw_lag_block_coefficient_records = records.frame(ReferenceTable.RAW_LAG_COEFFICIENT)
+    orth_lag_block_coefficient_records = records.frame(ReferenceTable.ORTH_LAG_COEFFICIENT)
+    raw_decomposition_records = records.frame(ReferenceTable.RAW_DECOMPOSITION)
+    orth_decomposition_records = records.frame(ReferenceTable.ORTH_DECOMPOSITION)
+
+    out: dict[str, Any] = {
         "representative": representative,
         "filter_kwargs": filter_kwargs,
         "err_scale": err_scale,
-        "lb_records": lb_records,
         "lb_summary": aggregate_scalar_frame(lb_records, ["measurement"], alpha=alpha),
-        "moment_records": moment_records,
         "moment_summary": summarize_average_moments(moment_records),
         "moment_summary_mc_se": summarize_average_moment_mc_se(moment_records),
         "moment_mean_vector": average_vector(moment_records, "mean"),
@@ -931,59 +1047,41 @@ def summarize_reference_experiment(
         "moment_covariance_mc_se": average_matrix_mc_se(moment_records, "cov"),
         "moment_correlation": average_matrix(moment_records, "corr"),
         "moment_correlation_mc_se": average_matrix_mc_se(moment_records, "corr"),
-        "moment_specification_tests": moment_spec_tests,
         "moment_specification_test_summary": summarize_moment_specification_tests(
             moment_spec_tests,
             alpha=alpha,
         ),
-        "orthogonalization_records": orth_records,
         "orthogonalization_summary": add_rejection_summary(
             orth_records,
             ["target", "regressor"],
             alpha=alpha,
         ),
-        "measurement_regressions_raw_records": raw_reg_records,
-        "measurement_regressions_raw_by_predictor": records_by_predictor(raw_reg_records),
         "measurement_regressions_raw_summary": add_rejection_summary(
             raw_reg_records,
             ["measurement", "predictor"],
             alpha=alpha,
         ),
-        "measurement_regressions_orthogonalized_records": orth_reg_records,
-        "measurement_regressions_orthogonalized_by_predictor": records_by_predictor(orth_reg_records),
         "measurement_regressions_orthogonalized_summary": add_rejection_summary(
             orth_reg_records,
             ["measurement", "predictor"],
             alpha=alpha,
         ),
-        "measurement_lag_block_regressions_raw_records": raw_lag_block_records,
-        "measurement_lag_block_regressions_raw_by_predictor": records_by_predictor(raw_lag_block_records),
         "measurement_lag_block_regressions_raw_summary": add_rejection_summary(
             raw_lag_block_records,
             ["measurement", "predictor"],
             alpha=alpha,
         ),
-        "measurement_lag_block_regressions_orthogonalized_records": orth_lag_block_records,
-        "measurement_lag_block_regressions_orthogonalized_by_predictor": records_by_predictor(orth_lag_block_records),
         "measurement_lag_block_regressions_orthogonalized_summary": add_rejection_summary(
             orth_lag_block_records,
             ["measurement", "predictor"],
             alpha=alpha,
         ),
-        "measurement_lag_block_coefficients_raw_records": raw_lag_block_coefficient_records,
-        "measurement_lag_block_coefficients_raw_by_predictor": records_by_predictor(raw_lag_block_coefficient_records),
-        "measurement_lag_block_coefficients_orthogonalized_records": orth_lag_block_coefficient_records,
-        "measurement_lag_block_coefficients_orthogonalized_by_predictor": records_by_predictor(orth_lag_block_coefficient_records),
-        "innovation_decomposition_raw_records": raw_decomposition_records,
-        "innovation_decomposition_raw_by_predictor": records_by_predictor(raw_decomposition_records),
         "innovation_decomposition_raw_summary": aggregate_scalar_frame(
             raw_decomposition_records,
             ["measurement", "predictor"],
             value_cols=INNOVATION_DECOMPOSITION_VALUE_COLUMNS,
             alpha=alpha,
         ),
-        "innovation_decomposition_orthogonalized_records": orth_decomposition_records,
-        "innovation_decomposition_orthogonalized_by_predictor": records_by_predictor(orth_decomposition_records),
         "innovation_decomposition_orthogonalized_summary": aggregate_scalar_frame(
             orth_decomposition_records,
             ["measurement", "predictor"],
@@ -1008,6 +1106,39 @@ def summarize_reference_experiment(
         ),
     }
 
+    if not summary_only:
+        out.update(
+            {
+                "lb_records": lb_records,
+                "moment_records": moment_records,
+                "moment_specification_tests": moment_spec_tests,
+                "orthogonalization_records": orth_records,
+                "measurement_regressions_raw_records": raw_reg_records,
+                "measurement_regressions_orthogonalized_records": orth_reg_records,
+                "measurement_lag_block_regressions_raw_records": raw_lag_block_records,
+                "measurement_lag_block_regressions_orthogonalized_records": orth_lag_block_records,
+                "measurement_lag_block_coefficients_raw_records": raw_lag_block_coefficient_records,
+                "measurement_lag_block_coefficients_orthogonalized_records": orth_lag_block_coefficient_records,
+                "innovation_decomposition_raw_records": raw_decomposition_records,
+                "innovation_decomposition_orthogonalized_records": orth_decomposition_records,
+            }
+        )
+        if include_by_predictor:
+            out.update(
+                {
+                    "measurement_regressions_raw_by_predictor": records_by_predictor(raw_reg_records),
+                    "measurement_regressions_orthogonalized_by_predictor": records_by_predictor(orth_reg_records),
+                    "measurement_lag_block_regressions_raw_by_predictor": records_by_predictor(raw_lag_block_records),
+                    "measurement_lag_block_regressions_orthogonalized_by_predictor": records_by_predictor(orth_lag_block_records),
+                    "measurement_lag_block_coefficients_raw_by_predictor": records_by_predictor(raw_lag_block_coefficient_records),
+                    "measurement_lag_block_coefficients_orthogonalized_by_predictor": records_by_predictor(orth_lag_block_coefficient_records),
+                    "innovation_decomposition_raw_by_predictor": records_by_predictor(raw_decomposition_records),
+                    "innovation_decomposition_orthogonalized_by_predictor": records_by_predictor(orth_decomposition_records),
+                }
+            )
+
+    return out
+
 
 def summarize_mle_augmentation_experiment(
     sol: Any,
@@ -1020,6 +1151,7 @@ def summarize_mle_augmentation_experiment(
     candidate_param: str,
     mc_samples: int,
     alpha: float = ALPHA_DEFAULT,
+    summary_only: bool = False,
 ) -> dict[str, Any]:
     filter_kwargs = reference_summary["filter_kwargs"]
     representative_reference: ReferenceRepresentative = reference_summary["representative"]
@@ -1028,9 +1160,7 @@ def summarize_mle_augmentation_experiment(
     augmentation_seed_counter = make_seed_counter(start=1_000_000)
 
     lr_rows: list[dict[str, Any]] = []
-    lb_rows: list[pd.DataFrame] = []
-    moment_rows: list[dict[str, float]] = []
-    moment_spec_rows: list[pd.DataFrame] = []
+    records = MCTableStore(mc_samples)
     representative: AugmentationRepresentative | None = None
 
     for replication in range(mc_samples):
@@ -1088,11 +1218,17 @@ def summarize_mle_augmentation_experiment(
                     "success": True,
                 }
             )
-            lb_df = lb_test_frame(std_innov_aug, alpha=alpha)
-            lb_df["replication"] = replication
-            lb_rows.append(lb_df)
-            moment_rows.append({"replication": replication, **summarize_moment_record(std_innov_aug)})
-            moment_spec_rows.append(moment_specification_test_frame(std_innov_aug, replication=replication))
+            records.append(AugmentationTable.LB, replication, lb_test_records(std_innov_aug, alpha=alpha))
+            records.append(
+                AugmentationTable.MOMENT,
+                replication,
+                {"replication": replication, **summarize_moment_record(std_innov_aug)},
+            )
+            records.append(
+                AugmentationTable.MOMENT_SPEC,
+                replication,
+                moment_specification_test_records(std_innov_aug, replication=replication),
+            )
         except Exception as exc:
             lr_rows.append(
                 {
@@ -1128,22 +1264,17 @@ def summarize_mle_augmentation_experiment(
             )
 
     lr_records = pd.DataFrame(lr_rows)
-    lb_records = pd.concat(lb_rows, ignore_index=True) if lb_rows else pd.DataFrame(columns=["measurement", "lb_stat", "p_value", "replication"])
-    moment_records = pd.DataFrame(moment_rows)
-    moment_spec_tests = (
-        pd.concat(moment_spec_rows, ignore_index=True)
-        if moment_spec_rows
-        else pd.DataFrame()
-    )
+    lb_records = records.frame(AugmentationTable.LB)
+    if lb_records.empty:
+        lb_records = pd.DataFrame(columns=["measurement", "lb_stat", "p_value", "replication"])
+    moment_records = records.frame(AugmentationTable.MOMENT)
+    moment_spec_tests = records.frame(AugmentationTable.MOMENT_SPEC)
     reference_moment_spec_tests = reference_summary.get("moment_specification_tests", pd.DataFrame())
 
-    return {
+    out: dict[str, Any] = {
         "representative": representative,
-        "lr_records": lr_records,
         "lr_summary": aggregate_scalar_frame(lr_records.dropna(subset=["p_value"]), [], alpha=alpha) if not lr_records.dropna(subset=["p_value"]).empty else pd.DataFrame(),
-        "lb_records": lb_records,
         "lb_summary": aggregate_scalar_frame(lb_records, ["measurement"], alpha=alpha) if not lb_records.empty else pd.DataFrame(),
-        "moment_records": moment_records,
         "moment_summary": summarize_average_moments(moment_records) if not moment_records.empty else pd.Series(dtype=float),
         "moment_summary_mc_se": summarize_average_moment_mc_se(moment_records) if not moment_records.empty else pd.Series(dtype=float),
         "moment_mean_vector": average_vector(moment_records, "mean") if not moment_records.empty else pd.Series(dtype=float),
@@ -1152,7 +1283,6 @@ def summarize_mle_augmentation_experiment(
         "moment_covariance_mc_se": average_matrix_mc_se(moment_records, "cov") if not moment_records.empty else pd.DataFrame(),
         "moment_correlation": average_matrix(moment_records, "corr") if not moment_records.empty else pd.DataFrame(),
         "moment_correlation_mc_se": average_matrix_mc_se(moment_records, "corr") if not moment_records.empty else pd.DataFrame(),
-        "moment_specification_tests": moment_spec_tests,
         "moment_specification_test_summary": summarize_moment_specification_tests(
             moment_spec_tests,
             alpha=alpha,
@@ -1163,3 +1293,15 @@ def summarize_mle_augmentation_experiment(
             alpha=alpha,
         ) if not moment_spec_tests.empty and not reference_moment_spec_tests.empty else pd.DataFrame(),
     }
+
+    if not summary_only:
+        out.update(
+            {
+                "lr_records": lr_records,
+                "lb_records": lb_records,
+                "moment_records": moment_records,
+                "moment_specification_tests": moment_spec_tests,
+            }
+        )
+
+    return out

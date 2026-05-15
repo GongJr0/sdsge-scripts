@@ -21,7 +21,6 @@ from mc_experiment import (
     summarize_reference_experiment,
     summarize_mle_augmentation_experiment,
     augmented_config_path,
-    size_adjusted_power_comparison,
 )
 
 from SymbolicDSGE import ModelParser, DSGESolver, Shock
@@ -48,8 +47,10 @@ _AUGMENTED_PARAM = 'Pi_coef'
 _AUGMENTED_EQUATION = 'OutGap'
 _AUGMENTED_CONFIG = augmented_config_path(_AUGMENTED_EQUATION)
 _MEAS_ERR_SCALE = 0.00
-_MC_SAMPLES = 100_000
+_MC_SAMPLES = 100_0
 _MC_ALPHA = 0.05
+_MC_SUMMARY_ONLY = False
+_MC_INCLUDE_BY_PREDICTOR = False
 _FIGSIZE_1D = (10, 6)
 _FIGSIZE_2D = (12, 6)
 
@@ -123,6 +124,8 @@ mc_reference = summarize_reference_experiment(
     mc_samples=_MC_SAMPLES,
     known_r=_KNOWN_R,
     alpha=_MC_ALPHA,
+    summary_only=_MC_SUMMARY_ONLY,
+    include_by_predictor=_MC_INCLUDE_BY_PREDICTOR,
 )
 
 rep_ref = mc_reference["representative"]

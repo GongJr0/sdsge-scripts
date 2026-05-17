@@ -16,6 +16,8 @@ class ReferenceTable(Enum):
     ORTHOGONALIZATION = "orthogonalization_records"
     RAW_REGRESSION = "measurement_regressions_raw_records"
     ORTH_REGRESSION = "measurement_regressions_orthogonalized_records"
+    RAW_JOINT_REGRESSION = "measurement_joint_regressions_raw_records"
+    RAW_JOINT_RELATIVE_WALD = "measurement_joint_relative_wald_raw_records"
     RAW_LAG_BLOCK = "measurement_lag_block_regressions_raw_records"
     ORTH_LAG_BLOCK = "measurement_lag_block_regressions_orthogonalized_records"
     RAW_LAG_COEFFICIENT = "measurement_lag_block_coefficients_raw_records"

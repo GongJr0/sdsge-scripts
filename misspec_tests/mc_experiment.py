@@ -851,6 +851,16 @@ def summarize_reference_experiment(
             replication,
             reg_diag["measurement_regressions_raw"].records,
         )
+        records.append(
+            ReferenceTable.RAW_JOINT_REGRESSION,
+            replication,
+            reg_diag["measurement_joint_regressions_raw"].records,
+        )
+        records.append(
+            ReferenceTable.RAW_JOINT_RELATIVE_WALD,
+            replication,
+            reg_diag["measurement_joint_regressions_raw"].relative_wald_records,
+        )
 
         records.append(
             ReferenceTable.ORTH_REGRESSION,
@@ -963,6 +973,20 @@ def summarize_reference_experiment(
             ["measurement", "predictor"],
             alpha=alpha,
         )
+        raw_joint_reg_records = records.frame(ReferenceTable.RAW_JOINT_REGRESSION)
+        out["measurement_joint_regressions_raw_summary"] = add_rejection_summary(
+            raw_joint_reg_records,
+            ["measurement", "predictor"],
+            alpha=alpha,
+        )
+        del raw_joint_reg_records
+        raw_joint_wald_records = records.frame(ReferenceTable.RAW_JOINT_RELATIVE_WALD)
+        out["measurement_joint_relative_wald_raw_summary"] = add_rejection_summary(
+            raw_joint_wald_records,
+            ["measurement", "predictor_i", "predictor_j"],
+            alpha=alpha,
+        )
+        del raw_joint_wald_records
         raw_lag_block_records = records.frame(ReferenceTable.RAW_LAG_BLOCK)
         out["measurement_lag_block_regressions_raw_summary"] = add_rejection_summary(
             raw_lag_block_records,
@@ -1026,6 +1050,8 @@ def summarize_reference_experiment(
     moment_spec_tests = records.frame(ReferenceTable.MOMENT_SPEC)
     orth_records = records.frame(ReferenceTable.ORTHOGONALIZATION)
     raw_reg_records = records.frame(ReferenceTable.RAW_REGRESSION)
+    raw_joint_reg_records = records.frame(ReferenceTable.RAW_JOINT_REGRESSION)
+    raw_joint_wald_records = records.frame(ReferenceTable.RAW_JOINT_RELATIVE_WALD)
     orth_reg_records = records.frame(ReferenceTable.ORTH_REGRESSION)
     raw_lag_block_records = records.frame(ReferenceTable.RAW_LAG_BLOCK)
     orth_lag_block_records = records.frame(ReferenceTable.ORTH_LAG_BLOCK)
@@ -1059,6 +1085,16 @@ def summarize_reference_experiment(
         "measurement_regressions_raw_summary": add_rejection_summary(
             raw_reg_records,
             ["measurement", "predictor"],
+            alpha=alpha,
+        ),
+        "measurement_joint_regressions_raw_summary": add_rejection_summary(
+            raw_joint_reg_records,
+            ["measurement", "predictor"],
+            alpha=alpha,
+        ),
+        "measurement_joint_relative_wald_raw_summary": add_rejection_summary(
+            raw_joint_wald_records,
+            ["measurement", "predictor_i", "predictor_j"],
             alpha=alpha,
         ),
         "measurement_regressions_orthogonalized_summary": add_rejection_summary(
@@ -1114,6 +1150,8 @@ def summarize_reference_experiment(
                 "moment_specification_tests": moment_spec_tests,
                 "orthogonalization_records": orth_records,
                 "measurement_regressions_raw_records": raw_reg_records,
+                "measurement_joint_regressions_raw_records": raw_joint_reg_records,
+                "measurement_joint_relative_wald_raw_records": raw_joint_wald_records,
                 "measurement_regressions_orthogonalized_records": orth_reg_records,
                 "measurement_lag_block_regressions_raw_records": raw_lag_block_records,
                 "measurement_lag_block_regressions_orthogonalized_records": orth_lag_block_records,
@@ -1127,6 +1165,7 @@ def summarize_reference_experiment(
             out.update(
                 {
                     "measurement_regressions_raw_by_predictor": records_by_predictor(raw_reg_records),
+                    "measurement_joint_regressions_raw_by_predictor": records_by_predictor(raw_joint_reg_records),
                     "measurement_regressions_orthogonalized_by_predictor": records_by_predictor(orth_reg_records),
                     "measurement_lag_block_regressions_raw_by_predictor": records_by_predictor(raw_lag_block_records),
                     "measurement_lag_block_regressions_orthogonalized_by_predictor": records_by_predictor(orth_lag_block_records),

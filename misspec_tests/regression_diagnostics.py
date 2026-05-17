@@ -6,7 +6,7 @@ from typing import Dict, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.stats import f, t
+from scipy.stats import chi2, f, t
 from sklearn.metrics import r2_score
 
 from mc_storage import MCRecordBatch
@@ -255,6 +255,20 @@ class LagBlockRegressionBundle:
     @cached_property
     def coefficients(self) -> pd.DataFrame:
         return self.coefficient_records.to_frame()
+
+
+@dataclass
+class JointRegressionBundle:
+    records: MCRecordBatch
+    relative_wald_records: MCRecordBatch
+
+    @cached_property
+    def raw(self) -> pd.DataFrame:
+        return self.records.to_frame()
+
+    @cached_property
+    def relative_wald(self) -> pd.DataFrame:
+        return self.relative_wald_records.to_frame()
 
 
 @dataclass
@@ -543,6 +557,120 @@ def run_measurement_regressions(
     )
 
 
+def run_measurement_joint_regressions(
+    measurements: Mapping[str, np.ndarray],
+    predictors: Mapping[str, np.ndarray],
+) -> JointRegressionBundle:
+    rows = []
+    wald_rows = []
+    predictor_names = list(predictors.keys())
+    X = np.column_stack([np.asarray(predictors[name], dtype=float).reshape(-1) for name in predictor_names])
+    X_std = _zscore(X)
+
+    for measurement_name, y in measurements.items():
+        y_vec = np.asarray(y, dtype=float).reshape(-1)
+        model = ols(
+            y=y_vec,
+            X=X,
+            y_name=measurement_name,
+            x_names=predictor_names,
+        )
+        std_model = ols(
+            y=_zscore(y_vec),
+            X=X_std,
+            y_name=measurement_name,
+            x_names=predictor_names,
+        )
+
+        for slope_idx, predictor_name in enumerate(predictor_names, start=1):
+            rows.append(
+                {
+                    "measurement": measurement_name,
+                    "predictor": predictor_name,
+                    "coef": model.beta[slope_idx],
+                    "standardized_coef": std_model.beta[slope_idx],
+                    "std_error": model.se[slope_idx],
+                    "standardized_std_error": std_model.se[slope_idx],
+                    "t_stat": model.t_stat[slope_idx],
+                    "p_value": model.p_value[slope_idx],
+                    "r2": model.r2,
+                    "sample_size": model.nobs,
+                    "df_resid": model.df_resid,
+                }
+            )
+
+        for left_pos, left_name in enumerate(predictor_names, start=1):
+            for right_pos, right_name in enumerate(predictor_names[left_pos:], start=left_pos + 1):
+                contrast = float(std_model.beta[left_pos] - std_model.beta[right_pos])
+                c = np.zeros_like(std_model.beta)
+                c[left_pos] = 1.0
+                c[right_pos] = -1.0
+                contrast_var = float(c @ std_model.cov_beta @ c)
+                if contrast_var > 0.0 and np.isfinite(contrast_var):
+                    contrast_std_error = float(np.sqrt(contrast_var))
+                    wald_stat = float((contrast**2) / contrast_var)
+                    p_value = float(chi2.sf(wald_stat, df=1))
+                else:
+                    contrast_std_error = np.nan
+                    wald_stat = np.nan
+                    p_value = np.nan
+
+                wald_rows.append(
+                    {
+                        "measurement": measurement_name,
+                        "predictor_i": left_name,
+                        "predictor_j": right_name,
+                        "standardized_coef_i": std_model.beta[left_pos],
+                        "standardized_coef_j": std_model.beta[right_pos],
+                        "standardized_coef_diff": contrast,
+                        "contrast_std_error": contrast_std_error,
+                        "wald_stat": wald_stat,
+                        "p_value": p_value,
+                        "df": 1,
+                        "r2": model.r2,
+                        "sample_size": model.nobs,
+                        "df_resid": model.df_resid,
+                    }
+                )
+
+    return JointRegressionBundle(
+        records=MCRecordBatch.from_records(
+            rows,
+            columns=[
+                "measurement",
+                "predictor",
+                "coef",
+                "standardized_coef",
+                "std_error",
+                "standardized_std_error",
+                "t_stat",
+                "p_value",
+                "r2",
+                "sample_size",
+                "df_resid",
+            ],
+        ),
+        relative_wald_records=MCRecordBatch.from_records(
+            wald_rows,
+            columns=[
+                "measurement",
+                "predictor_i",
+                "predictor_j",
+                "standardized_coef_i",
+                "standardized_coef_j",
+                "standardized_coef_diff",
+                "contrast_std_error",
+                "wald_stat",
+                "p_value",
+                "df",
+                "r2",
+                "sample_size",
+                "df_resid",
+            ],
+        ),
+    )
+
+
 
 def run_single_predictor_reports(
     measurements: Mapping[str, np.ndarray],
@@ -620,6 +748,10 @@ def run_full_regression_diagnostics(
         raw_states,
         z_score_standardization=z_score_standardization,
     )
+    raw_joint_regs = run_measurement_joint_regressions(
+        measurements,
+        raw_states,
+    )
     orth_measurement_regs = run_measurement_regressions(
         measurements,
         orth_bundle.residuals,
@@ -639,6 +771,7 @@ def run_full_regression_diagnostics(
         "measurements": measurements,
         "orthogonalization": orth_bundle,
         "measurement_regressions_raw": raw_measurement_regs,
+        "measurement_joint_regressions_raw": raw_joint_regs,
         "measurement_regressions_orthogonalized": orth_measurement_regs,
         "measurement_lag_block_regressions_raw": raw_lag_block_regs,
         "measurement_lag_block_regressions_orthogonalized": orth_lag_block_regs,
@@ -662,6 +795,7 @@ def run_full_regression_diagnostics(
 def format_regression_outputs(diagnostics: Mapping[str, object], *, round_to: int = 3) -> dict[str, object]:
     orth_bundle: OrthogonalizationBundle = diagnostics["orthogonalization"]
     raw_regs: MeasurementRegressionBundle = diagnostics["measurement_regressions_raw"]
+    raw_joint_regs: JointRegressionBundle = diagnostics["measurement_joint_regressions_raw"]
     orth_regs: MeasurementRegressionBundle = diagnostics["measurement_regressions_orthogonalized"]
     raw_lag_regs: LagBlockRegressionBundle = diagnostics["measurement_lag_block_regressions_raw"]
     orth_lag_regs: LagBlockRegressionBundle = diagnostics["measurement_lag_block_regressions_orthogonalized"]
@@ -682,6 +816,8 @@ def format_regression_outputs(diagnostics: Mapping[str, object], *, round_to: in
         "single_predictor_raw": {k: v.round(round_to) for k, v in raw_single.by_measurement.items()},
         "single_predictor_orthogonalized": {k: v.round(round_to) for k, v in orth_single.by_measurement.items()},
         "measurement_regressions_raw_long": raw_regs.raw.round(round_to),
+        "measurement_joint_regressions_raw_long": raw_joint_regs.raw.round(round_to),
+        "measurement_joint_relative_wald_raw_long": raw_joint_regs.relative_wald.round(round_to),
         "measurement_regressions_orthogonalized_long": orth_regs.raw.round(round_to),
         "measurement_lag_block_regressions_raw_long": raw_lag_regs.raw.round(round_to),
         "measurement_lag_block_regressions_orthogonalized_long": orth_lag_regs.raw.round(round_to),

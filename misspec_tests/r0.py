@@ -254,6 +254,14 @@ _sort_summary(mc_reference["measurement_regressions_raw_summary"]).round(3)
 
 
 # %%
+print("Joint Raw Regressions:")
+_sort_summary(mc_reference["measurement_joint_regressions_raw_summary"])
+
+# %%
+print("Joint Raw Regression Wald Tests:")
+_sort_summary(mc_reference["measurement_joint_relative_wald_raw_summary"])
+
+# %%
 print("Innovation decomposition on orthogonalized predicted states (Monte Carlo averages):")
 _sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"])
 

@@ -43,8 +43,8 @@ import io
 STDOUT_VOID = lambda: contextlib.redirect_stdout(io.StringIO())
 
 _KNOWN_R = False
-_AUGMENTED_PARAM = 'x_coef'
-_AUGMENTED_EQUATION = 'OutGap'
+_AUGMENTED_PARAM = 'r_coef'
+_AUGMENTED_EQUATION = 'Rate'
 _AUGMENTED_CONFIG = augmented_config_path(_AUGMENTED_EQUATION)
 _MEAS_ERR_SCALE = 0.05
 _MC_SAMPLES = 100_000

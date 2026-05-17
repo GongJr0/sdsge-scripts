@@ -49,8 +49,8 @@ _AUGMENTED_CONFIG = augmented_config_path(_AUGMENTED_EQUATION)
 _MEAS_ERR_SCALE = 0.10
 _MC_SAMPLES = 100_000
 _MC_ALPHA = 0.05
-_MC_SUMMARY_ONLY = False
-_MC_INCLUDE_BY_PREDICTOR = True
+_MC_SUMMARY_ONLY = True
+_MC_INCLUDE_BY_PREDICTOR = False
 _FIGSIZE_1D = (10, 6)
 _FIGSIZE_2D = (12, 6)
 
@@ -202,12 +202,12 @@ _sort_summary(mc_reference["measurement_regressions_raw_summary"]).round(3)
 
 
 # %%
-print("Innovation decomposition on orthogonalized predicted states (Monte Carlo averages):")
-_sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"]).round(3)
+print("Innovation decomposition orthogonal summary:")
+_sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"])
 
 # %%
-print("Innovation decomposition on raw predicted states (Monte Carlo averages):")
-_sort_summary(mc_reference["innovation_decomposition_raw_summary"]).round(3)
+print("Innovation decomposition raw summary:")
+_sort_summary(mc_reference["innovation_decomposition_raw_summary"])
 
 # %% [markdown]
 # Monte Carlo summaries above aggregate `_MC_SAMPLES` independent draws. The plots and MCMC output below continue on a representative first draw.

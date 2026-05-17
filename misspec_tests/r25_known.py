@@ -21,7 +21,6 @@ from mc_experiment import (
     summarize_reference_experiment,
     summarize_mle_augmentation_experiment,
     augmented_config_path,
-    size_adjusted_power_comparison,
 )
 
 from SymbolicDSGE import ModelParser, DSGESolver, Shock
@@ -50,6 +49,8 @@ _AUGMENTED_CONFIG = augmented_config_path(_AUGMENTED_EQUATION)
 _MEAS_ERR_SCALE = 0.25
 _MC_SAMPLES = 100_000
 _MC_ALPHA = 0.05
+_MC_SUMMARY_ONLY = True
+_MC_INCLUDE_BY_PREDICTOR = False
 _FIGSIZE_1D = (10, 6)
 _FIGSIZE_2D = (12, 6)
 
@@ -124,6 +125,8 @@ mc_reference = summarize_reference_experiment(
     mc_samples=_MC_SAMPLES,
     known_r=_KNOWN_R,
     alpha=_MC_ALPHA,
+    summary_only=_MC_SUMMARY_ONLY,
+    include_by_predictor=_MC_INCLUDE_BY_PREDICTOR,
 )
 
 rep_ref = mc_reference["representative"]
@@ -199,12 +202,12 @@ _sort_summary(mc_reference["measurement_regressions_raw_summary"]).round(3)
 
 
 # %%
-print("Innovation decomposition on orthogonalized predicted states (Monte Carlo averages):")
-_sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"]).round(3)
+print("Innovation decomposition orthogonal summary:")
+_sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"])
 
 # %%
-print("Innovation decomposition on raw predicted states (Monte Carlo averages):")
-_sort_summary(mc_reference["innovation_decomposition_raw_summary"]).round(3)
+print("Innovation decomposition raw summary:")
+_sort_summary(mc_reference["innovation_decomposition_raw_summary"])
 
 # %% [markdown]
 # Monte Carlo summaries above aggregate `_MC_SAMPLES` independent draws. The plots and MCMC output below continue on a representative first draw.
@@ -236,6 +239,7 @@ with STDOUT_VOID():
         candidate_param=_AUGMENTED_PARAM,
         mc_samples=_MC_SAMPLES,
         alpha=_MC_ALPHA,
+        summary_only=_MC_SUMMARY_ONLY,
     )
 
 # estim = lambda: solver_aug.estimate_and_solve(

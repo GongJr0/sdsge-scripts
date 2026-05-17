@@ -234,6 +234,13 @@ print(f"Momoent Tests summary across {_MC_SAMPLES} replications:")
 display(mc_reference["moment_specification_test_summary"].round(3))
 
 # %%
+print("Reference Model Std. Innov. Means:\n")
+print(mc_reference["moment_mean_vector"].round(3))
+
+print("Reference Model Std. Innov. Covariance:\n")
+print(mc_reference["moment_covariance"].round(3))
+
+# %%
 print("Orthogonalization summary (Monte Carlo averages and rejection rates):")
 _sort_summary(mc_reference["orthogonalization_summary"]).round(3)
 
@@ -248,11 +255,11 @@ _sort_summary(mc_reference["measurement_regressions_raw_summary"]).round(3)
 
 # %%
 print("Innovation decomposition on orthogonalized predicted states (Monte Carlo averages):")
-_sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"]).round(3)
+_sort_summary(mc_reference["innovation_decomposition_orthogonalized_summary"])
 
 # %%
 print("Innovation decomposition on raw predicted states (Monte Carlo averages):")
-_sort_summary(mc_reference["innovation_decomposition_raw_summary"]).round(3)
+_sort_summary(mc_reference["innovation_decomposition_raw_summary"])
 
 # %%
 n_bins = 20
@@ -621,6 +628,10 @@ res_mle
 # ## Serial Autocorrelation Tests for the Augmented Model
 
 # %%
+print(f"Monte Carlo Ljung-Box summary across {_MC_SAMPLES} replications:")
+mc_aug["lb_summary"].round(3)
+
+# %%
 print("Reference moment-specification test summary:")
 display(mc_reference["moment_specification_test_summary"].round(3))
 
@@ -630,3 +641,10 @@ display(mc_aug["moment_specification_test_summary"].round(3))
 print("Reference-minus-augmented moment distance comparison:")
 display(mc_aug["moment_specification_comparison"].round(3))
 
+
+# %%
+print("Augmented Model Std. Innov. Means:\n")
+print(mc_aug["moment_mean_vector"].round(3))
+
+print("Augmented Model Std. Innov. Covariance:\n")
+print(mc_aug["moment_covariance"].round(3))

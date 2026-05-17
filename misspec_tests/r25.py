@@ -42,11 +42,11 @@ import contextlib
 import io
 STDOUT_VOID = lambda: contextlib.redirect_stdout(io.StringIO())
 
-_KNOWN_R = True
-_AUGMENTED_PARAM = 'x_coef'
-_AUGMENTED_EQUATION = 'OutGap'
+_KNOWN_R = False
+_AUGMENTED_PARAM = 'r_coef'
+_AUGMENTED_EQUATION = 'Rate'
 _AUGMENTED_CONFIG = augmented_config_path(_AUGMENTED_EQUATION)
-_MEAS_ERR_SCALE = 0.05
+_MEAS_ERR_SCALE = 0.25
 _MC_SAMPLES = 100_000
 _MC_ALPHA = 0.05
 _MC_SUMMARY_ONLY = True
@@ -182,7 +182,6 @@ print(f"Augmented coefficient: {_AUGMENTED_PARAM}")
 print(f"Monte Carlo replications: {_MC_SAMPLES}")
 print("Noise Covariance:\n", np.diag(err_scale).round(3))
 
-
 # %%
 print(f"Monte Carlo Ljung-Box summary across {_MC_SAMPLES} replications:")
 display(mc_reference["lb_summary"].round(3))
@@ -211,6 +210,7 @@ _sort_summary(mc_reference["innovation_decomposition_raw_summary"])
 
 # %% [markdown]
 # Monte Carlo summaries above aggregate `_MC_SAMPLES` independent draws. The plots and MCMC output below continue on a representative first draw.
+#
 
 # %%
 parser_aug = ModelParser(_AUGMENTED_CONFIG)
@@ -239,6 +239,7 @@ with STDOUT_VOID():
         candidate_param=_AUGMENTED_PARAM,
         mc_samples=_MC_SAMPLES,
         alpha=_MC_ALPHA,
+        summary_only=_MC_SUMMARY_ONLY,
     )
 
 # estim = lambda: solver_aug.estimate_and_solve(
@@ -256,7 +257,6 @@ with STDOUT_VOID():
 #     **mc_reference["filter_kwargs"],
 # )
 # res_aug, sol_aug = estim()
-
 
 
 # %% [markdown]

@@ -18,7 +18,7 @@ from SymbolicDSGE import ModelParser, DSGESolver, Shock
 from SymbolicDSGE.utils import FRED
 from SymbolicDSGE.utils.math_utils import HP_two_sided, annualized_log_percent
 from SymbolicDSGE.bayesian import make_prior
-from SymbolicDSGE.regression import TemplateConfig, PySRParams, ModelParametrizer
+from SymbolicDSGE.regression.sr import TemplateConfig, PySRParams, ModelParametrizer
 
 from sympy import Matrix, Float, preorder_traversal
 from warnings import catch_warnings, simplefilter

@@ -820,7 +820,6 @@ def summarize_reference_experiment(
         kf = sol.kalman(
             y=obs,
             filter_mode="linear",
-            estimate_R_diag=False,
             **filter_kwargs,
         )
         std_innov = standardize_innovations(kf)
@@ -1168,7 +1167,6 @@ def summarize_mle_augmentation_experiment(
         ref_kf = sol.kalman(
             y=obs,
             filter_mode="linear",
-            estimate_R_diag=False,
             **filter_kwargs,
         )
 
@@ -1201,7 +1199,6 @@ def summarize_mle_augmentation_experiment(
             kf_aug = sol_mle.kalman(
                 y=obs,
                 filter_mode="linear",
-                estimate_R_diag=False,
                 **filter_kwargs,
             )
             std_innov_aug = standardize_innovations(kf_aug)

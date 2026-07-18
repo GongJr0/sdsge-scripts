@@ -300,7 +300,6 @@ estim = lambda: solver.estimate_and_solve(
     n_draws=25_000,
     burn_in=10_000,
     thin=1,
-    update_R_in_iterations=True,
     random_state=0,
 )
 res, sol = estim()
